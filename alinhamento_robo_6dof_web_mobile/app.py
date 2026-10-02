@@ -1858,10 +1858,24 @@ function sleep(ms) {{
     return new Promise(resolve => setTimeout(resolve, ms));
 }}
 
+let userCamera = null;
+
+// Guarda a câmera que o usuário estiver usando. Assim a animação nunca
+// força a cena de volta para a câmera inicial.
+gd.on('plotly_relayout', function(evt) {{
+    if (evt && evt['scene.camera']) {{
+        userCamera = evt['scene.camera'];
+    }}
+}});
+
 async function applySnapshot(snapshot) {{
     const x = snapshot.map(item => item.x);
     const y = snapshot.map(item => item.y);
     const z = snapshot.map(item => item.z);
+
+    // Captura a câmera atual antes do update.
+    // O usuário pode rotacionar/usar zoom durante a animação.
+    const cameraBefore = userCamera || gd.layout.scene.camera;
 
     // Uma única chamada atualiza TODOS os elementos móveis.
     // Nenhum trace estático entra nesta operação.
@@ -1874,6 +1888,13 @@ async function applySnapshot(snapshot) {{
         }},
         DYNAMIC_INDICES
     );
+
+    // Alguns navegadores/WebGL podem reconstruir a cena durante o restyle.
+    // Reaplica somente a câmera, sem recriar a geometria.
+    if (cameraBefore) {{
+        userCamera = cameraBefore;
+        await Plotly.relayout(gd, {{'scene.camera': cameraBefore}});
+    }}
 }}
 
 async function startAnimation() {{
