@@ -1865,12 +1865,10 @@ async function applySnapshot(snapshot) {{
     const y = snapshot.map(item => item.y);
     const z = snapshot.map(item => item.z);
 
-    // Captura a câmera atual antes do update.
-    // O usuário pode rotacionar/usar zoom durante a animação.
-    const cameraBefore = userCamera || gd.layout.scene.camera;
-
-    // Uma única chamada atualiza TODOS os elementos móveis.
-    // Nenhum trace estático entra nesta operação.
+    // Atualiza somente os traces móveis.
+    // NÃO fazemos Plotly.relayout() aqui: ele estava sobrescrevendo
+    // a câmera enquanto o usuário tentava rotacionar/usar zoom.
+    // O uirevision fixo do layout mantém a câmera durante o restyle.
     await Plotly.restyle(
         gd,
         {{
@@ -1880,13 +1878,6 @@ async function applySnapshot(snapshot) {{
         }},
         DYNAMIC_INDICES
     );
-
-    // Alguns navegadores/WebGL podem reconstruir a cena durante o restyle.
-    // Reaplica somente a câmera, sem recriar a geometria.
-    if (cameraBefore) {{
-        userCamera = cameraBefore;
-        await Plotly.relayout(gd, {{'scene.camera': cameraBefore}});
-    }}
 }}
 
 async function startAnimation() {{
@@ -1960,8 +1951,14 @@ Plotly.newPlot(
     // Fazer gd.on(...) antes do newPlot deixa o gráfico em branco em alguns
     // navegadores.
     gd.on('plotly_relayout', function(evt) {{
-        if (evt && evt['scene.camera']) {{
-            userCamera = evt['scene.camera'];
+        // Plotly pode emitir a câmera como 'scene.camera' ou como
+        // propriedades individuais ('scene.camera.eye.x', etc.).
+        // Em ambos os casos, lemos a câmera completa já atualizada.
+        if (evt) {{
+            const keys = Object.keys(evt);
+            if (keys.some(k => k === 'scene.camera' || k.startsWith('scene.camera.'))) {{
+                userCamera = JSON.parse(JSON.stringify(gd.layout.scene.camera));
+            }}
         }}
     }});
 
