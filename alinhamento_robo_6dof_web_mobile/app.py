@@ -2238,7 +2238,23 @@ if align_clicked:
 
     st.session_state.stop_requested = False
 
-    q0 = st.session_state.q.copy()
+    # Se já existe uma trajetória calculada para a mesma configuração,
+    # reutiliza a trajetória original para que clicar novamente em
+    # ALINHAR reproduza a simulação, em vez de começar da pose final
+    # e retornar imediatamente com 0 iterações.
+    previous_states = st.session_state.get("trajectory")
+    previous_cfg = st.session_state.get("trajectory_cfg")
+
+    can_replay = (
+        previous_states is not None
+        and len(previous_states) > 1
+        and previous_cfg == cfg
+    )
+
+    if can_replay:
+        q0 = np.asarray(previous_states[0], dtype=float).copy()
+    else:
+        q0 = st.session_state.q.copy()
 
     with st.spinner("Calculando trajetória de alinhamento..."):
 
