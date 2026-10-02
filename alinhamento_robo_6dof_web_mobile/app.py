@@ -15,7 +15,7 @@ import streamlit.components.v1 as components
 
 st.set_page_config(
     page_title="Alinhamento Robô 6 DOF",
-    page_icon=None,
+    page_icon=str(Path(__file__).with_name("favicon.png")),
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -1236,10 +1236,10 @@ def solve_trajectory(q0, cfg, robot, lasers, max_iterations=300):
 
 
 def _dynamic_compact_snapshot(q, cfg, robot, lasers):
-    """Retorna a cena móvel compactada em apenas 7 traces.
+    """Retorna a cena móvel compactada em estruturas simples de listas e floats.
 
-    A animação atualiza somente estes traces com Plotly.restyle().
-    Assim, tubo e base permanecem intocados durante o movimento.
+    A animação em Canvas usa somente estes dados móveis.
+    Assim, tubo e base permanecem independentes do movimento.
     """
 
     T = robot.fk(q, cfg)
@@ -1625,7 +1625,28 @@ def make_canvas_animation_html(snapshots, cfg, robot, height=680, autoplay=True,
         "half": half,
     }
 
-    data_json = json.dumps(payload, separators=(",", ":"), allow_nan=True)
+    def _json_safe(value):
+        """Converte recursivamente numpy/scalars e valores não finitos para JSON puro."""
+        if isinstance(value, dict):
+            return {str(k): _json_safe(v) for k, v in value.items()}
+        if isinstance(value, (list, tuple)):
+            return [_json_safe(v) for v in value]
+        if isinstance(value, np.ndarray):
+            return _json_safe(value.tolist())
+        if isinstance(value, np.generic):
+            value = value.item()
+            return _json_safe(value)
+        if isinstance(value, float):
+            return value if math.isfinite(value) else None
+        if isinstance(value, (str, int, bool)) or value is None:
+            return value
+        return str(value)
+
+    # O Streamlit Cloud pode usar versões diferentes de NumPy/Python.
+    # Não passamos nenhum numpy scalar/array diretamente para json.dumps.
+    # Também desabilitamos NaN/Infinity no JSON final para evitar TypeError.
+    payload = _json_safe(payload)
+    data_json = json.dumps(payload, separators=(",", ":"), allow_nan=False)
     autoplay_js = "setTimeout(startAnimation, 500);" if autoplay else ""
 
     return f'''<!DOCTYPE html>
