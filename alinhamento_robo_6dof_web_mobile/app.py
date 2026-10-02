@@ -2000,95 +2000,91 @@ Plotly.newPlot(
     return html
 
 
-def make_static_camera_html(fig, height=650):
-    """Cena inicial usando a mesma renderização Plotly da animação, preservando a câmera."""
+def make_static_camera_html_v32(fig, height=620):
+    """Cena inicial no DOM principal do Streamlit, preservando a câmera."""
     fig_json = fig.to_json()
-    camera_key = "robot_scene_camera_v31"
+    camera_key = "robot_scene_camera_v32"
 
     html = f"""
-<!DOCTYPE html>
-<html>
-<head>
-<meta charset="utf-8">
-<script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
-<style>
-html, body {{
-    margin: 0;
-    padding: 0;
-    background: white;
-    width: 100%;
-    height: 100%;
-    overflow: hidden;
-    font-family: Arial, sans-serif;
-}}
-#plot {{
-    width: 100%;
-    height: 100%;
-}}
-</style>
-</head>
-<body>
-<div id="plot"></div>
+<div id="robot-scene-v32" style="width:100%;height:{int(height)}px;background:#ffffff;overflow:hidden;"></div>
 <script>
-const fig = {fig_json};
-const gd = document.getElementById("plot");
-const CAMERA_KEY = "{camera_key}";
+(function() {{
+    const container = document.getElementById("robot-scene-v32");
+    if (!container) return;
 
-// Recupera a câmera ANTES de criar o Plotly.
-try {{
-    const raw = localStorage.getItem(CAMERA_KEY);
-    if (raw) {{
-        const camera = JSON.parse(raw);
-        fig.layout = fig.layout || {{}};
-        fig.layout.scene = fig.layout.scene || {{}};
-        fig.layout.scene.camera = camera;
-    }}
-}} catch (e) {{}}
+    const CAMERA_KEY = "{camera_key}";
+    const FIG = {fig_json};
 
-Plotly.newPlot(
-    gd,
-    fig.data,
-    fig.layout,
-    {{
-        responsive: true,
-        displaylogo: false,
-        scrollZoom: true,
-        displayModeBar: true,
-        modeBarButtonsToAdd: [
-            "resetCameraDefault",
-            "resetCameraLastSave"
-        ]
-    }}
-).then(function () {{
-    function saveCamera() {{
+    function getSavedCamera() {{
         try {{
-            if (gd.layout && gd.layout.scene && gd.layout.scene.camera) {{
-                localStorage.setItem(
-                    CAMERA_KEY,
-                    JSON.stringify(gd.layout.scene.camera)
-                );
-            }}
+            const raw = window.localStorage.getItem(CAMERA_KEY);
+            return raw ? JSON.parse(raw) : null;
+        }} catch (e) {{
+            return null;
+        }}
+    }}
+
+    function saveCamera(gd) {{
+        try {{
+            const camera = gd && gd.layout && gd.layout.scene && gd.layout.scene.camera;
+            if (camera) window.localStorage.setItem(CAMERA_KEY, JSON.stringify(camera));
         }} catch (e) {{}}
     }}
 
-    gd.on('plotly_relayout', function(evt) {{
-        if (!evt) return;
-        const keys = Object.keys(evt);
-        if (keys.some(k => k === 'scene.camera' || k.startsWith('scene.camera.'))) {{
-            saveCamera();
-        }}
-    }});
+    function render() {{
+        if (!window.Plotly) return;
 
-    gd.addEventListener('mouseup', function() {{
-        setTimeout(saveCamera, 0);
-    }});
-    gd.addEventListener('touchend', function() {{
-        setTimeout(saveCamera, 0);
-    }}, {{passive: true}});
-}});
+        const savedCamera = getSavedCamera();
+        if (savedCamera) {{
+            FIG.layout = FIG.layout || {{}};
+            FIG.layout.scene = FIG.layout.scene || {{}};
+            FIG.layout.scene.camera = savedCamera;
+        }}
+
+        Plotly.newPlot(
+            container,
+            FIG.data,
+            FIG.layout,
+            {{
+                responsive: true,
+                displaylogo: false,
+                scrollZoom: true,
+                displayModeBar: true,
+                modeBarButtonsToAdd: [
+                    "resetCameraDefault",
+                    "resetCameraLastSave"
+                ]
+            }}
+        ).then(function(gd) {{
+            gd.on("plotly_relayout", function(evt) {{
+                if (!evt) return;
+                const keys = Object.keys(evt);
+                if (keys.some(k => k === "scene.camera" || k.startsWith("scene.camera."))) {{
+                    saveCamera(gd);
+                }}
+            }});
+
+            gd.addEventListener("mouseup", function() {{
+                setTimeout(function() {{ saveCamera(gd); }}, 0);
+            }});
+            gd.addEventListener("touchend", function() {{
+                setTimeout(function() {{ saveCamera(gd); }}, 0);
+            }}, {{passive:true}});
+
+            saveCamera(gd);
+        }});
+    }}
+
+    if (window.Plotly) {{
+        render();
+    }} else {{
+        const script = document.createElement("script");
+        script.src = "https://cdn.plot.ly/plotly-latest.min.js";
+        script.onload = render;
+        document.head.appendChild(script);
+    }}
+}})();
 </script>
-</body>
-</html>
 """
     return html
 
@@ -2508,10 +2504,10 @@ else:
             lasers,
         )
 
-        components.html(
-            make_static_camera_html(scene_fig, height=650),
-            height=650,
-            scrolling=False,
+        st.html(
+            make_static_camera_html_v32(scene_fig, height=620),
+            width="stretch",
+            unsafe_allow_javascript=True,
         )
 
         col1, col2, col3, col4 = st.columns(4)
