@@ -1349,18 +1349,33 @@ def _dynamic_compact_snapshot(q, cfg, robot, lasers):
 
 
 def _sample_states(states, frame_count):
-    state_array = np.asarray(states, dtype=float)
-    if len(state_array) <= frame_count:
-        return state_array
+    """Interpola a trajetória para exatamente ``frame_count`` frames.
 
-    positions = np.linspace(0.0, len(state_array) - 1.0, frame_count)
-    samples = []
-    for pos in positions:
+    O solver normalmente produz poucos estados (por exemplo, 12 iterações).
+    A versão anterior só interpolava quando havia estados demais e, portanto,
+    uma trajetória curta continuava com poucos frames, deixando o movimento
+    visual muito brusco. Aqui sempre interpolamos para a quantidade pedida.
+    """
+    state_array = np.asarray(states, dtype=float)
+
+    if state_array.ndim != 2 or state_array.shape[0] == 0:
+        return np.empty((0, 6), dtype=float)
+
+    if frame_count <= 1 or state_array.shape[0] == 1:
+        return state_array[[0]].copy()
+
+    frame_count = int(max(frame_count, 2))
+
+    positions = np.linspace(0.0, state_array.shape[0] - 1.0, frame_count)
+    samples = np.empty((frame_count, state_array.shape[1]), dtype=float)
+
+    for k, pos in enumerate(positions):
         i0 = int(math.floor(pos))
-        i1 = min(i0 + 1, len(state_array) - 1)
-        a = pos - i0
-        samples.append((1.0 - a) * state_array[i0] + a * state_array[i1])
-    return np.asarray(samples, dtype=float)
+        i1 = min(i0 + 1, state_array.shape[0] - 1)
+        alpha = pos - i0
+        samples[k] = (1.0 - alpha) * state_array[i0] + alpha * state_array[i1]
+
+    return samples
 
 
 def make_animated_scene_figure(states, cfg, robot, lasers, frame_count=80):
@@ -1574,18 +1589,28 @@ def make_animated_scene_figure(states, cfg, robot, lasers, frame_count=80):
 
 
 def make_animated_html(fig, frames, height=650, autoplay=True):
-    """Reproduz Frames do Plotly sem tocar nos traces estáticos."""
+    """HTML robusto para reproduzir a animação no navegador.
+
+    Importante: os Frames NÃO são embutidos no JSON inicial do ``fig``.
+    Eles são registrados uma única vez com ``Plotly.addFrames``. Na V3,
+    ``fig.frames`` e ``addFrames`` eram usados ao mesmo tempo, o que podia
+    deixar os frames duplicados e impedir o Play de ser inicializado.
+    """
 
     import json
 
-    fig_json = json.dumps(fig.to_plotly_json(), separators=(",", ":"))
+    fig_json = fig.to_plotly_json()
+    # Os frames serão adicionados explicitamente abaixo. Evita duplicação.
+    fig_json.pop("frames", None)
+
+    fig_json = json.dumps(fig_json, separators=(",", ":"))
     frames_json = json.dumps(
         [f.to_plotly_json() for f in frames],
         separators=(",", ":"),
     )
 
     autoplay_js = """
-        setTimeout(function () { startAnimation(); }, 500);
+        setTimeout(function () { startAnimation(); }, 700);
     """ if autoplay else ""
 
     html = f"""
@@ -1598,89 +1623,115 @@ def make_animated_html(fig, frames, height=650, autoplay=True):
 html, body {{ margin:0; padding:0; background:white; width:100%; height:100%; overflow:hidden; }}
 #wrap {{ position:relative; width:100%; height:100%; }}
 #plot {{ width:100%; height:100%; }}
-.controls {{ position:absolute; top:8px; left:8px; z-index:10; display:flex; gap:6px; }}
-button {{ border:1px solid #bbb; background:white; border-radius:6px; padding:6px 10px; font-size:16px; box-shadow:0 1px 3px rgba(0,0,0,.15); }}
+.controls {{ position:absolute; top:8px; left:8px; z-index:20; display:flex; gap:6px; }}
+button {{ border:1px solid #bbb; background:white; border-radius:6px; padding:7px 11px; font-size:16px; box-shadow:0 1px 3px rgba(0,0,0,.15); }}
+button:active {{ transform:scale(.98); }}
 </style>
 </head>
 <body>
 <div id="wrap">
   <div id="plot"></div>
   <div class="controls">
-    <button id="play">▶</button>
-    <button id="stop">■</button>
+    <button id="play">▶ Play</button>
+    <button id="stop">■ Parar</button>
   </div>
 </div>
 <script>
 const fig = {fig_json};
 const frames = {frames_json};
 const gd = document.getElementById('plot');
-let timer = null;
 let playing = false;
-let index = 0;
-const FRAME_MS = 300; // ~3.3 frames/s: bem mais lento no celular
-const FRAME_ANIM_MS = 250;
+let currentIndex = 0;
+let playToken = 0;
+
+// Simulação deliberadamente mais lenta.
+const FRAME_DELAY_MS = 450;
+const FRAME_ANIMATION_MS = 120;
+
+function sleep(ms) {{
+    return new Promise(resolve => setTimeout(resolve, ms));
+}}
 
 async function showFrame(k) {{
-  if (!frames.length) return;
-  const name = frames[k].name;
-  await Plotly.animate(
-    gd,
-    [name],
-    {{
-      mode: 'immediate',
-      transition: {{duration: 0}},
-      frame: {{duration: FRAME_ANIM_MS, redraw: false}},
-    }}
-  );
+    if (!frames.length) return;
+
+    const name = frames[k].name;
+
+    await Plotly.animate(
+        gd,
+        [name],
+        {{
+            mode: 'immediate',
+            transition: {{duration: 0}},
+            frame: {{duration: FRAME_ANIMATION_MS, redraw: false}},
+        }}
+    );
 }}
 
 function stopAnimation() {{
-  playing = false;
-  if (timer !== null) {{
-    clearTimeout(timer);
-    timer = null;
-  }}
+    playing = false;
+    playToken += 1;
 }}
 
 async function startAnimation() {{
-  if (!frames.length) return;
+    if (!frames.length) return;
 
-  stopAnimation();
-  playing = true;
+    const token = ++playToken;
+    playing = true;
 
-  try {{
-    for (index = 0; index < frames.length; index++) {{
-      if (!playing) break;
-      await showFrame(index);
-      if (!playing) break;
+    try {{
+        for (let k = currentIndex; k < frames.length; k++) {{
+            if (!playing || token !== playToken) return;
 
-      await new Promise(resolve => {{
-        timer = setTimeout(resolve, FRAME_MS);
-      }});
+            currentIndex = k;
+            await showFrame(k);
+
+            if (!playing || token !== playToken) return;
+            await sleep(FRAME_DELAY_MS);
+        }}
+
+        // Terminou: fica no último frame.
+        currentIndex = frames.length - 1;
+    }} catch (err) {{
+        console.error('Erro na animação:', err);
+    }} finally {{
+        if (token === playToken) playing = false;
     }}
-  }} catch (err) {{
-    console.error(err);
-  }} finally {{
-    stopAnimation();
-  }}
 }}
 
-Plotly.newPlot(
-  gd,
-  fig.data,
-  fig.layout,
-  {{
-    responsive:true,
-    displaylogo:false,
-    scrollZoom:false,
-    displayModeBar:false,
-  }}
-).then(async function() {{
-  await Plotly.addFrames(gd, frames);
-  document.getElementById('play').onclick = startAnimation;
-  document.getElementById('stop').onclick = stopAnimation;
-  {autoplay_js}
-}});
+async function init() {{
+    try {{
+        await Plotly.newPlot(
+            gd,
+            fig.data,
+            fig.layout,
+            {{
+                responsive:true,
+                displaylogo:false,
+                scrollZoom:false,
+                displayModeBar:false,
+            }}
+        );
+
+        // Registra os frames UMA ÚNICA VEZ.
+        await Plotly.addFrames(gd, frames);
+
+        document.getElementById('play').onclick = function () {{
+            if (currentIndex >= frames.length - 1) currentIndex = 0;
+            startAnimation();
+        }};
+
+        document.getElementById('stop').onclick = function () {{
+            stopAnimation();
+        }};
+
+        {autoplay_js}
+    }} catch (err) {{
+        console.error('Erro ao inicializar a cena:', err);
+    }}
+}}
+
+init();
 </script>
 </body>
 </html>
@@ -1788,6 +1839,9 @@ def load_robot():
 robot = load_robot()
 lasers = FourLasers(robot)
 initialize_state(robot)
+
+if "stop_requested" not in st.session_state:
+    st.session_state.stop_requested = False
 
 st.title("🤖 Alinhamento automático — Robô 6 DOF + 4 lasers")
 st.caption(
@@ -1975,9 +2029,6 @@ with st.sidebar:
 
 cfg = config_from_widgets()
 
-if "stop_requested" not in st.session_state:
-    st.session_state.stop_requested = False
-
 if align_clicked:
 
     st.session_state.stop_requested = False
@@ -2005,7 +2056,7 @@ if align_clicked:
         cfg,
         robot,
         lasers,
-        frame_count=120,
+        frame_count=60,
     )
 
     components.html(
@@ -2101,11 +2152,10 @@ if align_clicked:
 
     st.session_state.history = original_history
 
-    st.caption(
-        "A animação é reproduzida no navegador. "
-        "O cálculo da trajetória é feito uma única vez no servidor; "
-        "por isso o movimento não depende de dezenas de atualizações "
-        "do Streamlit."
+    st.info(
+        f"Trajetória calculada: {result['iterations']} iterações • "
+        f"{len(animation_snapshots)} frames visuais. "
+        "O cálculo é feito uma única vez no servidor e a animação roda no navegador."
     )
 
 # ------------------------------------------------------------
