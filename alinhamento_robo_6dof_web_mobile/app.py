@@ -176,6 +176,47 @@ def cylinder_mesh_z(center, radius, height, n_theta=48, n_z=18):
     return xx, yy, zz
 
 
+def cylinder_mesh_z_mesh3d(center, radius, height, n_theta=64):
+    """Malha lateral de um cilindro para go.Mesh3d.
+
+    O tubo permanece oco e é um trace estático. Usar Mesh3d aqui evita
+    que uma go.Surface transparente perca a renderização quando os traces
+    móveis são atualizados durante o Play em navegadores móveis.
+    """
+    cx, cy, cz = map(float, center)
+    n_theta = max(int(n_theta), 16)
+    theta = np.linspace(0.0, 2.0 * math.pi, n_theta, endpoint=False)
+    z0 = cz - float(height) / 2.0
+    z1 = cz + float(height) / 2.0
+
+    bottom = np.column_stack((
+        cx + radius * np.cos(theta),
+        cy + radius * np.sin(theta),
+        np.full(n_theta, z0),
+    ))
+    top = np.column_stack((
+        cx + radius * np.cos(theta),
+        cy + radius * np.sin(theta),
+        np.full(n_theta, z1),
+    ))
+
+    vertices = np.vstack((bottom, top))
+    x = vertices[:, 0]
+    y = vertices[:, 1]
+    z = vertices[:, 2]
+
+    i = []
+    j = []
+    k = []
+    for n in range(n_theta):
+        m = (n + 1) % n_theta
+        i.extend([n, n])
+        j.extend([m, n_theta + m])
+        k.extend([n_theta + m, n_theta + n])
+
+    return x, y, z, i, j, k
+
+
 def cylinder_mesh_between(p1, p2, radius, n_theta=18):
     """Malha cilíndrica de um elo entre dois pontos."""
 
@@ -647,7 +688,7 @@ def make_scene_figure(q, cfg, robot, lasers):
     # TUBO
     # ----------------------------
 
-    xx, yy, zz = cylinder_mesh_z(
+    tx, ty, tz, ti, tj, tk = cylinder_mesh_z_mesh3d(
         center=(
             cfg["tube_x"],
             cfg["tube_y"],
@@ -657,21 +698,22 @@ def make_scene_figure(q, cfg, robot, lasers):
         height=cfg["tube_length"],
     )
 
-    tube_surface = go.Surface(
-        x=xx,
-        y=yy,
-        z=zz,
-        opacity=0.22,
-        colorscale=[
-            [0, "#BDBDBD"],
-            [1, "#BDBDBD"],
-        ],
-        showscale=False,
-        hoverinfo="skip",
-        name="Tubo",
+    fig.add_trace(
+        go.Mesh3d(
+            x=tx,
+            y=ty,
+            z=tz,
+            i=ti,
+            j=tj,
+            k=tk,
+            opacity=0.22,
+            color="#BDBDBD",
+            hoverinfo="skip",
+            name="Tubo",
+            flatshading=False,
+            lighting=dict(ambient=0.75, diffuse=0.25, specular=0.05),
+        )
     )
-
-    fig.add_trace(tube_surface)
 
     # ----------------------------
     # EIXO DO TUBO
@@ -1521,6 +1563,7 @@ def make_animated_scene_figure(
 
     Estratégia:
     - Os traces estáticos (tubo, eixo e base) são criados uma única vez.
+    - O tubo usa Mesh3d estático para maior estabilidade no WebGL móvel.
     - Os traces móveis são atualizados exclusivamente por Plotly.restyle().
     - Não usamos Plotly Frames, Plotly.animate() ou redraw da cena 3D.
     """
@@ -1540,7 +1583,7 @@ def make_animated_scene_figure(
     # --------------------------------------------------------
     fig = go.Figure()
 
-    xx, yy, zz = cylinder_mesh_z(
+    tx, ty, tz, ti, tj, tk = cylinder_mesh_z_mesh3d(
         center=(
             cfg["tube_x"],
             cfg["tube_y"],
@@ -1550,19 +1593,21 @@ def make_animated_scene_figure(
         height=cfg["tube_length"],
     )
 
+    # Trace 0: tubo estático. Não entra em nenhuma restyle da animação.
     fig.add_trace(
-        go.Surface(
-            x=xx,
-            y=yy,
-            z=zz,
+        go.Mesh3d(
+            x=tx,
+            y=ty,
+            z=tz,
+            i=ti,
+            j=tj,
+            k=tk,
             opacity=0.22,
-            colorscale=[
-                [0, "#BDBDBD"],
-                [1, "#BDBDBD"],
-            ],
-            showscale=False,
+            color="#BDBDBD",
             hoverinfo="skip",
             name="Tubo",
+            flatshading=False,
+            lighting=dict(ambient=0.75, diffuse=0.25, specular=0.05),
         )
     )
 
