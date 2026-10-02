@@ -1363,11 +1363,17 @@ def _sample_states(states, frame_count):
     return np.asarray(samples, dtype=float)
 
 
-def make_animated_scene_figure(states, cfg, robot, lasers, frame_count=120):
-    """Cria a figura fixa e os dados móveis separados.
+def make_animated_scene_figure(states, cfg, robot, lasers, frame_count=80):
+    """Cria uma cena com 3 traces estáticos e 8 traces móveis.
 
-    O navegador anima somente os 7 traces móveis por restyle().
-    Tubo, eixo e base são criados uma vez e nunca entram na animação.
+    A animação é feita com Frames do próprio Plotly e com ``traces`` explícitos.
+    Isso é importante: cada frame atualiza SOMENTE os objetos móveis e nunca
+    substitui ou recria tubo, eixo e base.
+
+    Além disso, todos os pontos que pertencem ao conjunto móvel (robô,
+    retângulo, sensores e lasers) são calculados a partir da MESMA pose dentro
+    de cada frame. Assim A/B/C/D não podem ficar em uma pose diferente da
+    moldura durante a reprodução.
     """
 
     if not states:
@@ -1383,23 +1389,23 @@ def make_animated_scene_figure(states, cfg, robot, lasers, frame_count=120):
     fig = go.Figure()
 
     # --------------------------------------------------------
-    # ESTÁTICOS: tubo + eixo + base
+    # ESTÁTICOS: nunca entram nos frames
     # --------------------------------------------------------
 
     tx, ty, tz = cylinder_wireframe_z(
         center=(cfg["tube_x"], cfg["tube_y"], cfg["tube_z"]),
         radius=cfg["tube_diameter"]/2.0,
         height=cfg["tube_length"],
-        n_theta=48,
-        n_rings=5,
-        n_generators=16,
+        n_theta=64,
+        n_rings=7,
+        n_generators=20,
     )
 
     fig.add_trace(go.Scatter3d(
         x=tx, y=ty, z=tz,
         mode="lines",
         line=dict(color="#9E9E9E", width=2),
-        opacity=0.38,
+        opacity=0.42,
         hoverinfo="skip",
         name="Tubo",
         showlegend=False,
@@ -1413,8 +1419,8 @@ def make_animated_scene_figure(states, cfg, robot, lasers, frame_count=120):
         z=[z1, z2],
         mode="lines",
         line=dict(color="#E53935", width=5),
-        name="Eixo",
         hoverinfo="skip",
+        name="Eixo",
         showlegend=False,
     ))
 
@@ -1422,81 +1428,65 @@ def make_animated_scene_figure(states, cfg, robot, lasers, frame_count=120):
         center=(cfg["base_x"], cfg["base_y"], cfg["base_z"]),
         radius=120,
         height=180,
-        n_theta=48,
-        n_rings=4,
-        n_generators=20,
+        n_theta=64,
+        n_rings=5,
+        n_generators=24,
     )
     fig.add_trace(go.Scatter3d(
         x=bx, y=by, z=bz,
         mode="lines",
-        line=dict(color="#3F3F3F", width=7),
-        opacity=0.95,
+        line=dict(color="#303030", width=8),
+        opacity=1.0,
         hoverinfo="skip",
         name="Base",
         showlegend=False,
     ))
 
-    # --------------------------------------------------------
-    # MÓVEIS: 8 traces
-    # robô, juntas, retângulo, centro, normal, lasers, impactos, sensores
-    # --------------------------------------------------------
-
+    # Índices fixos dos traces móveis.
+    # 3 = links, 4 = juntas, 5 = retângulo, 6 = centro,
+    # 7 = normal, 8 = lasers, 9 = impactos, 10 = sensores.
     fig.add_trace(go.Scatter3d(
         x=first["links"]["x"], y=first["links"]["y"], z=first["links"]["z"],
         mode="lines",
         line=dict(color="#4682B4", width=15),
-        hoverinfo="skip", name="Robô",
-        showlegend=False,
+        hoverinfo="skip", showlegend=False,
     ))
-
     fig.add_trace(go.Scatter3d(
         x=first["joints"]["x"], y=first["joints"]["y"], z=first["joints"]["z"],
         mode="markers",
         marker=dict(size=7, color="#0B2E59"),
-        hoverinfo="skip", name="Juntas",
-        showlegend=False,
+        hoverinfo="skip", showlegend=False,
     ))
-
     fig.add_trace(go.Scatter3d(
         x=first["rectangle"]["x"], y=first["rectangle"]["y"], z=first["rectangle"]["z"],
         mode="lines",
         line=dict(color="#00B8D9", width=8),
-        hoverinfo="skip", name="Retângulo",
-        showlegend=False,
+        hoverinfo="skip", showlegend=False,
     ))
-
     fig.add_trace(go.Scatter3d(
         x=first["center"]["x"], y=first["center"]["y"], z=first["center"]["z"],
         mode="markers",
         marker=dict(size=6, color="white", line=dict(color="#333333", width=1)),
-        hoverinfo="skip", name="Centro / J6",
-        showlegend=False,
+        hoverinfo="skip", showlegend=False,
     ))
-
     fig.add_trace(go.Scatter3d(
         x=first["normal"]["x"], y=first["normal"]["y"], z=first["normal"]["z"],
         mode="lines",
         line=dict(color="#AB47BC", width=5),
-        hoverinfo="skip", name="Normal / Laser",
-        showlegend=False,
+        hoverinfo="skip", showlegend=False,
     ))
-
     fig.add_trace(go.Scatter3d(
         x=first["lasers"]["x"], y=first["lasers"]["y"], z=first["lasers"]["z"],
-        mode="lines", line=dict(color="#FF6D00", width=5),
-        hoverinfo="skip", name="Lasers",
-        showlegend=False,
+        mode="lines",
+        line=dict(color="#FF6D00", width=5),
+        hoverinfo="skip", showlegend=False,
     ))
-
     fig.add_trace(go.Scatter3d(
         x=first["impacts"]["x"], y=first["impacts"]["y"], z=first["impacts"]["z"],
-        mode="markers", marker=dict(size=5, color="#00C853"),
-        hoverinfo="skip", name="Impactos",
-        showlegend=False,
+        mode="markers",
+        marker=dict(size=5, color="#00C853"),
+        hoverinfo="skip", showlegend=False,
     ))
-
-    # Sensores com labels ficam em um 8º trace móvel. Isso é leve e
-    # permite manter A/B/C/D em cada posição.
     fig.add_trace(go.Scatter3d(
         x=first["sensors"]["x"], y=first["sensors"]["y"], z=first["sensors"]["z"],
         mode="markers+text",
@@ -1504,9 +1494,41 @@ def make_animated_scene_figure(states, cfg, robot, lasers, frame_count=120):
         text=first["sensor_labels"],
         textposition="top center",
         textfont=dict(size=13, color="#111111"),
-        hoverinfo="skip", name="Sensores",
-        showlegend=False,
+        hoverinfo="skip", showlegend=False,
     ))
+
+    # --------------------------------------------------------
+    # FRAMES: apenas os 8 traces móveis
+    # --------------------------------------------------------
+
+    mobile_indices = [3, 4, 5, 6, 7, 8, 9, 10]
+    frames = []
+
+    for k, s in enumerate(snapshots):
+        frame_data = [
+            go.Scatter3d(x=s["links"]["x"], y=s["links"]["y"], z=s["links"]["z"]),
+            go.Scatter3d(x=s["joints"]["x"], y=s["joints"]["y"], z=s["joints"]["z"]),
+            go.Scatter3d(x=s["rectangle"]["x"], y=s["rectangle"]["y"], z=s["rectangle"]["z"]),
+            go.Scatter3d(x=s["center"]["x"], y=s["center"]["y"], z=s["center"]["z"]),
+            go.Scatter3d(x=s["normal"]["x"], y=s["normal"]["y"], z=s["normal"]["z"]),
+            go.Scatter3d(x=s["lasers"]["x"], y=s["lasers"]["y"], z=s["lasers"]["z"]),
+            go.Scatter3d(x=s["impacts"]["x"], y=s["impacts"]["y"], z=s["impacts"]["z"]),
+            go.Scatter3d(
+                x=s["sensors"]["x"],
+                y=s["sensors"]["y"],
+                z=s["sensors"]["z"],
+                text=s["sensor_labels"],
+            ),
+        ]
+        frames.append(
+            go.Frame(
+                name=f"frame_{k}",
+                data=frame_data,
+                traces=mobile_indices,
+            )
+        )
+
+    fig.frames = frames
 
     lo, hi = scene_bounds(cfg, robot)
 
@@ -1516,35 +1538,54 @@ def make_animated_scene_figure(states, cfg, robot, lasers, frame_count=120):
         paper_bgcolor="white",
         plot_bgcolor="white",
         showlegend=False,
-        uirevision="fixed_scene",
+        uirevision="fixed_scene_v3",
         scene=dict(
-            xaxis=dict(title="X (mm)", range=[float(lo[0]), float(hi[0])], showgrid=True, zeroline=False),
-            yaxis=dict(title="Y (mm)", range=[float(lo[1]), float(hi[1])], showgrid=True, zeroline=False),
-            zaxis=dict(title="Z (mm)", range=[float(lo[2]), float(hi[2])], showgrid=True, zeroline=False),
-            # Mesma escala física nos 3 eixos.
-            aspectmode="manual",
-            aspectratio=dict(x=1, y=1, z=1),
+            xaxis=dict(
+                title="X (mm)",
+                range=[float(lo[0]), float(hi[0])],
+                showgrid=True,
+                zeroline=False,
+            ),
+            yaxis=dict(
+                title="Y (mm)",
+                range=[float(lo[1]), float(hi[1])],
+                showgrid=True,
+                zeroline=False,
+            ),
+            zaxis=dict(
+                title="Z (mm)",
+                range=[float(lo[2]), float(hi[2])],
+                showgrid=True,
+                zeroline=False,
+            ),
+            # Igualdade física entre X/Y/Z. O modo cube evita que o browser
+            # altere a razão visual entre as unidades.
+            aspectmode="cube",
             camera=dict(
-                eye=dict(x=1.55, y=1.55, z=2.45),
+                eye=dict(x=1.10, y=1.10, z=3.60),
+                center=dict(x=0.0, y=0.0, z=0.0),
+                up=dict(x=0.0, y=0.0, z=1.0),
                 projection=dict(type="orthographic"),
             ),
         ),
     )
 
-    return fig, snapshots
+    return fig, frames
 
 
-def make_animated_html(fig, snapshots, height=650, autoplay=True):
-    """Anima somente os traces móveis; os estáticos nunca são alterados."""
+def make_animated_html(fig, frames, height=650, autoplay=True):
+    """Reproduz Frames do Plotly sem tocar nos traces estáticos."""
 
     import json
 
-    fig_json = fig.to_plotly_json()
-    snapshots_json = json.dumps(snapshots, separators=(",", ":"))
-    fig_json_str = json.dumps(fig_json, separators=(",", ":"))
+    fig_json = json.dumps(fig.to_plotly_json(), separators=(",", ":"))
+    frames_json = json.dumps(
+        [f.to_plotly_json() for f in frames],
+        separators=(",", ":"),
+    )
 
     autoplay_js = """
-        setTimeout(function () { startAnimation(); }, 350);
+        setTimeout(function () { startAnimation(); }, 500);
     """ if autoplay else ""
 
     html = f"""
@@ -1570,30 +1611,27 @@ button {{ border:1px solid #bbb; background:white; border-radius:6px; padding:6p
   </div>
 </div>
 <script>
-const fig = {fig_json_str};
-const frames = {snapshots_json};
+const fig = {fig_json};
+const frames = {frames_json};
 const gd = document.getElementById('plot');
 let timer = null;
-let index = 0;
 let playing = false;
-const FRAME_MS = 140;
+let index = 0;
+const FRAME_MS = 300; // ~3.3 frames/s: bem mais lento no celular
+const FRAME_ANIM_MS = 250;
 
-const LINK_I = 3;
-const JOINT_I = 4;
-const RECT_I = 5;
-const CENTER_I = 6;
-const NORMAL_I = 7;
-const LASER_I = 8;
-const IMPACT_I = 9;
-const SENSOR_I = 10;
-
-function applyFrame(k) {{
-  const f = frames[k];
-  return Plotly.restyle(gd, {{
-    x: [f.links.x, f.joints.x, f.rectangle.x, f.center.x, f.normal.x, f.lasers.x, f.impacts.x, f.sensors.x],
-    y: [f.links.y, f.joints.y, f.rectangle.y, f.center.y, f.normal.y, f.lasers.y, f.impacts.y, f.sensors.y],
-    z: [f.links.z, f.joints.z, f.rectangle.z, f.normal.z, f.lasers.z, f.impacts.z, f.sensors.z]
-  }}, [LINK_I, JOINT_I, RECT_I, CENTER_I, NORMAL_I, LASER_I, IMPACT_I, SENSOR_I]);
+async function showFrame(k) {{
+  if (!frames.length) return;
+  const name = frames[k].name;
+  await Plotly.animate(
+    gd,
+    [name],
+    {{
+      mode: 'immediate',
+      transition: {{duration: 0}},
+      frame: {{duration: FRAME_ANIM_MS, redraw: false}},
+    }}
+  );
 }}
 
 function stopAnimation() {{
@@ -1606,47 +1644,39 @@ function stopAnimation() {{
 
 async function startAnimation() {{
   if (!frames.length) return;
+
   stopAnimation();
   playing = true;
-  index = 0;
 
   try {{
-    await applyFrame(index);
-    scheduleNext();
+    for (index = 0; index < frames.length; index++) {{
+      if (!playing) break;
+      await showFrame(index);
+      if (!playing) break;
+
+      await new Promise(resolve => {{
+        timer = setTimeout(resolve, FRAME_MS);
+      }});
+    }}
   }} catch (err) {{
     console.error(err);
+  }} finally {{
     stopAnimation();
   }}
 }}
 
-function scheduleNext() {{
-  if (!playing) return;
-
-  if (index >= frames.length - 1) {{
-    stopAnimation();
-    return;
+Plotly.newPlot(
+  gd,
+  fig.data,
+  fig.layout,
+  {{
+    responsive:true,
+    displaylogo:false,
+    scrollZoom:false,
+    displayModeBar:false,
   }}
-
-  timer = setTimeout(async function() {{
-    if (!playing) return;
-    index += 1;
-
-    try {{
-      await applyFrame(index);
-      scheduleNext();
-    }} catch (err) {{
-      console.error(err);
-      stopAnimation();
-    }}
-  }}, FRAME_MS);
-}}
-
-Plotly.newPlot(gd, fig.data, fig.layout, {{
-  responsive:true,
-  displaylogo:false,
-  scrollZoom:false,
-  displayModeBar:false
-}}).then(function() {{
+).then(async function() {{
+  await Plotly.addFrames(gd, frames);
   document.getElementById('play').onclick = startAnimation;
   document.getElementById('stop').onclick = stopAnimation;
   {autoplay_js}
