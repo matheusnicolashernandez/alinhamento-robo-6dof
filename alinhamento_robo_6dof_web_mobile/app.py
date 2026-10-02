@@ -175,6 +175,41 @@ def cylinder_mesh_z(center, radius, height, n_theta=48, n_z=18):
     return xx, yy, zz
 
 
+
+def cylinder_wireframe_z(center, radius, height, n_theta=48, n_rings=5, n_generators=16):
+    """Cilindro desenhado apenas com linhas 3D.
+
+    Em navegadores móveis, a malha Surface/WebGL pode desaparecer quando a cena
+    recebe muitas atualizações durante a animação. O wireframe é muito mais
+    estável e mantém tubo/base presentes durante todo o movimento.
+    """
+    cx, cy, cz = center
+    theta = np.linspace(0.0, 2.0 * math.pi, n_theta, endpoint=True)
+    z_levels = np.linspace(cz - height/2.0, cz + height/2.0, n_rings)
+
+    xs, ys, zs = [], [], []
+
+    # Anéis horizontais.
+    for z0 in z_levels:
+        for t in theta:
+            xs.append(cx + radius * math.cos(t))
+            ys.append(cy + radius * math.sin(t))
+            zs.append(z0)
+        xs.append(None); ys.append(None); zs.append(None)
+
+    # Geratrizes verticais.
+    theta_g = np.linspace(0.0, 2.0 * math.pi, n_generators, endpoint=False)
+    z0 = cz - height/2.0
+    z1 = cz + height/2.0
+    for t in theta_g:
+        x0 = cx + radius * math.cos(t)
+        y0 = cy + radius * math.sin(t)
+        xs += [x0, x0, None]
+        ys += [y0, y0, None]
+        zs += [z0, z1, None]
+
+    return xs, ys, zs
+
 def cylinder_mesh_between(p1, p2, radius, n_theta=18):
     """Malha cilíndrica de um elo entre dois pontos."""
 
@@ -628,10 +663,15 @@ def scene_bounds(cfg, robot):
     lo = np.minimum(tube_min, base - base_pad)
     hi = np.maximum(tube_max, base + base_pad)
 
-    # margem visual
-    span = hi - lo
-    lo -= span * 0.08
-    hi += span * 0.08
+    # Mesmo intervalo numérico nos três eixos: evita qualquer sensação de
+    # escala diferente entre X/Y/Z. A elipse aparente de um círculo em uma
+    # vista 3D oblíqua é apenas efeito de projeção, não deformação da escala.
+    center = (lo + hi) / 2.0
+    half = float(np.max(hi - lo)) / 2.0
+    half *= 1.08
+
+    lo = center - half
+    hi = center + half
 
     return lo, hi
 
@@ -646,7 +686,7 @@ def make_scene_figure(q, cfg, robot, lasers):
     # TUBO
     # ----------------------------
 
-    xx, yy, zz = cylinder_mesh_z(
+    tx, ty, tz = cylinder_wireframe_z(
         center=(
             cfg["tube_x"],
             cfg["tube_y"],
@@ -654,23 +694,19 @@ def make_scene_figure(q, cfg, robot, lasers):
         ),
         radius=cfg["tube_diameter"]/2.0,
         height=cfg["tube_length"],
+        n_theta=48,
+        n_rings=5,
+        n_generators=16,
     )
 
-    tube_surface = go.Surface(
-        x=xx,
-        y=yy,
-        z=zz,
-        opacity=0.22,
-        colorscale=[
-            [0, "#BDBDBD"],
-            [1, "#BDBDBD"],
-        ],
-        showscale=False,
+    fig.add_trace(go.Scatter3d(
+        x=tx, y=ty, z=tz,
+        mode="lines",
+        line=dict(color="#9E9E9E", width=2),
+        opacity=0.38,
         hoverinfo="skip",
         name="Tubo",
-    )
-
-    fig.add_trace(tube_surface)
+    ))
 
     # ----------------------------
     # EIXO DO TUBO
@@ -698,7 +734,7 @@ def make_scene_figure(q, cfg, robot, lasers):
     # BASE
     # ----------------------------
 
-    bx, by, bz = cylinder_mesh_z(
+    bx, by, bz = cylinder_wireframe_z(
         center=(
             cfg["base_x"],
             cfg["base_y"],
@@ -706,21 +742,17 @@ def make_scene_figure(q, cfg, robot, lasers):
         ),
         radius=120,
         height=180,
-        n_theta=40,
-        n_z=8,
+        n_theta=48,
+        n_rings=4,
+        n_generators=20,
     )
 
     fig.add_trace(
-        go.Surface(
-            x=bx,
-            y=by,
-            z=bz,
-            opacity=1.0,
-            colorscale=[
-                [0, "#555555"],
-                [1, "#555555"],
-            ],
-            showscale=False,
+        go.Scatter3d(
+            x=bx, y=by, z=bz,
+            mode="lines",
+            line=dict(color="#3F3F3F", width=7),
+            opacity=0.95,
             hoverinfo="skip",
             name="Base",
         )
@@ -980,7 +1012,8 @@ def make_scene_figure(q, cfg, robot, lasers):
                 showgrid=True,
                 zeroline=False,
             ),
-            aspectmode="cube",
+            aspectmode="manual",
+            aspectratio=dict(x=1, y=1, z=1),
             camera=dict(
                 eye=dict(
                     x=1.55,
@@ -1353,19 +1386,20 @@ def make_animated_scene_figure(states, cfg, robot, lasers, frame_count=120):
     # ESTÁTICOS: tubo + eixo + base
     # --------------------------------------------------------
 
-    xx, yy, zz = cylinder_mesh_z(
+    tx, ty, tz = cylinder_wireframe_z(
         center=(cfg["tube_x"], cfg["tube_y"], cfg["tube_z"]),
         radius=cfg["tube_diameter"]/2.0,
         height=cfg["tube_length"],
-        n_theta=32,
-        n_z=8,
+        n_theta=48,
+        n_rings=5,
+        n_generators=16,
     )
 
-    fig.add_trace(go.Surface(
-        x=xx, y=yy, z=zz,
-        opacity=0.22,
-        colorscale=[[0, "#BDBDBD"], [1, "#BDBDBD"]],
-        showscale=False,
+    fig.add_trace(go.Scatter3d(
+        x=tx, y=ty, z=tz,
+        mode="lines",
+        line=dict(color="#9E9E9E", width=2),
+        opacity=0.38,
         hoverinfo="skip",
         name="Tubo",
         showlegend=False,
@@ -1384,26 +1418,27 @@ def make_animated_scene_figure(states, cfg, robot, lasers, frame_count=120):
         showlegend=False,
     ))
 
-    bx, by, bz = cylinder_mesh_z(
+    bx, by, bz = cylinder_wireframe_z(
         center=(cfg["base_x"], cfg["base_y"], cfg["base_z"]),
         radius=120,
         height=180,
-        n_theta=32,
-        n_z=6,
+        n_theta=48,
+        n_rings=4,
+        n_generators=20,
     )
-    fig.add_trace(go.Surface(
+    fig.add_trace(go.Scatter3d(
         x=bx, y=by, z=bz,
-        opacity=1.0,
-        colorscale=[[0, "#555555"], [1, "#555555"]],
-        showscale=False,
+        mode="lines",
+        line=dict(color="#3F3F3F", width=7),
+        opacity=0.95,
         hoverinfo="skip",
         name="Base",
         showlegend=False,
     ))
 
     # --------------------------------------------------------
-    # MÓVEIS: exatamente 7 traces
-    # 3 links, joints, retângulo, centro, normal, lasers, impactos
+    # MÓVEIS: 8 traces
+    # robô, juntas, retângulo, centro, normal, lasers, impactos, sensores
     # --------------------------------------------------------
 
     fig.add_trace(go.Scatter3d(
@@ -1487,7 +1522,8 @@ def make_animated_scene_figure(states, cfg, robot, lasers, frame_count=120):
             yaxis=dict(title="Y (mm)", range=[float(lo[1]), float(hi[1])], showgrid=True, zeroline=False),
             zaxis=dict(title="Z (mm)", range=[float(lo[2]), float(hi[2])], showgrid=True, zeroline=False),
             # Mesma escala física nos 3 eixos.
-            aspectmode="cube",
+            aspectmode="manual",
+            aspectratio=dict(x=1, y=1, z=1),
             camera=dict(
                 eye=dict(x=1.55, y=1.55, z=2.45),
                 projection=dict(type="orthographic"),
@@ -1516,7 +1552,7 @@ def make_animated_html(fig, snapshots, height=650, autoplay=True):
 <html>
 <head>
 <meta charset="utf-8">
-<script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+<script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
 <style>
 html, body {{ margin:0; padding:0; background:white; width:100%; height:100%; overflow:hidden; }}
 #wrap {{ position:relative; width:100%; height:100%; }}
@@ -1540,8 +1576,8 @@ const gd = document.getElementById('plot');
 let timer = null;
 let index = 0;
 let playing = false;
+const FRAME_MS = 140;
 
-const STATIC_COUNT = 3;
 const LINK_I = 3;
 const JOINT_I = 4;
 const RECT_I = 5;
@@ -1553,38 +1589,56 @@ const SENSOR_I = 10;
 
 function applyFrame(k) {{
   const f = frames[k];
-  Plotly.restyle(gd, {{
+  return Plotly.restyle(gd, {{
     x: [f.links.x, f.joints.x, f.rectangle.x, f.center.x, f.normal.x, f.lasers.x, f.impacts.x, f.sensors.x],
     y: [f.links.y, f.joints.y, f.rectangle.y, f.center.y, f.normal.y, f.lasers.y, f.impacts.y, f.sensors.y],
-    z: [f.links.z, f.joints.z, f.rectangle.z, f.center.z, f.normal.z, f.lasers.z, f.impacts.z, f.sensors.z]
+    z: [f.links.z, f.joints.z, f.rectangle.z, f.normal.z, f.lasers.z, f.impacts.z, f.sensors.z]
   }}, [LINK_I, JOINT_I, RECT_I, CENTER_I, NORMAL_I, LASER_I, IMPACT_I, SENSOR_I]);
 }}
 
 function stopAnimation() {{
   playing = false;
   if (timer !== null) {{
-    clearInterval(timer);
+    clearTimeout(timer);
     timer = null;
   }}
 }}
 
-function startAnimation() {{
+async function startAnimation() {{
   if (!frames.length) return;
   stopAnimation();
   playing = true;
   index = 0;
-  applyFrame(index);
-  timer = setInterval(function() {{
+
+  try {{
+    await applyFrame(index);
+    scheduleNext();
+  }} catch (err) {{
+    console.error(err);
+    stopAnimation();
+  }}
+}}
+
+function scheduleNext() {{
+  if (!playing) return;
+
+  if (index >= frames.length - 1) {{
+    stopAnimation();
+    return;
+  }}
+
+  timer = setTimeout(async function() {{
     if (!playing) return;
     index += 1;
-    if (index >= frames.length) {{
-      index = frames.length - 1;
-      applyFrame(index);
+
+    try {{
+      await applyFrame(index);
+      scheduleNext();
+    }} catch (err) {{
+      console.error(err);
       stopAnimation();
-      return;
     }}
-    applyFrame(index);
-  }}, 45);
+  }}, FRAME_MS);
 }}
 
 Plotly.newPlot(gd, fig.data, fig.layout, {{
