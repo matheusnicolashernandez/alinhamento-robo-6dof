@@ -6,6 +6,7 @@ from pathlib import Path
 import numpy as np
 import plotly.graph_objects as go
 import streamlit as st
+import streamlit.components.v1 as components
 
 
 # ============================================================
@@ -1035,6 +1036,12 @@ def initialize_state(robot):
     if "manual_nonce" not in st.session_state:
         st.session_state.manual_nonce = 0
 
+    if "trajectory" not in st.session_state:
+        st.session_state.trajectory = None
+
+    if "trajectory_cfg" not in st.session_state:
+        st.session_state.trajectory_cfg = None
+
 
 def reset_history():
     st.session_state.history = {
@@ -1125,6 +1132,641 @@ def current_metrics(robot, lasers, q, cfg):
         max_dist_error = float("nan")
 
     return d, angle, max_dist_error
+
+
+# ============================================================
+# TRAJETÓRIA PRÉ-CALCULADA + ANIMAÇÃO NO NAVEGADOR
+# ============================================================
+
+def solve_trajectory(q0, cfg, robot, lasers, max_iterations=300):
+
+    controller = Controller(
+        robot,
+        lasers,
+        cfg,
+    )
+
+    q = np.asarray(q0, dtype=float).copy()
+
+    states = [q.copy()]
+    history = {
+        "iteration": [0],
+        "A": [],
+        "B": [],
+        "C": [],
+        "D": [],
+    }
+
+    aligned = False
+    reason = None
+
+    for iteration in range(max_iterations + 1):
+
+        d, angle, max_dist_error = current_metrics(
+            robot,
+            lasers,
+            q,
+            cfg,
+        )
+
+        for i, label in enumerate(["A", "B", "C", "D"]):
+            history[label].append(
+                float(d[i])
+                if np.isfinite(d[i])
+                else np.nan
+            )
+
+        if not np.all(np.isfinite(d)):
+            reason = "Um ou mais lasers não atingem o tubo."
+            break
+
+        if (
+            max_dist_error <= cfg["dist_tol"]
+            and
+            angle <= cfg["align_tol_deg"]
+        ):
+            aligned = True
+            break
+
+        if iteration >= max_iterations:
+            reason = "Limite de 300 iterações atingido."
+            break
+
+        qnew, ok = controller.step(q)
+
+        if not ok:
+            reason = "Falha na atualização da Jacobiana."
+            break
+
+        q = qnew
+        states.append(q.copy())
+        history["iteration"].append(iteration + 1)
+
+    metrics = {
+        "final_q": q.copy(),
+        "aligned": aligned,
+        "reason": reason,
+        "iterations": len(states) - 1,
+        "history": history,
+    }
+
+    return states, metrics
+
+
+def _dynamic_snapshot(q, cfg, robot, lasers):
+    """
+    Retorna somente os traces móveis.
+    A ordem é fixa para permitir animação por frames.
+    """
+
+    T = robot.fk(q, cfg)
+
+    joint_points = [
+        T["joint_1"][:3, 3],
+        T["joint_2"][:3, 3],
+        T["joint_3"][:3, 3],
+        T["joint_4"][:3, 3],
+        T["joint_5"][:3, 3],
+        T["joint_6"][:3, 3],
+    ]
+
+    traces = []
+
+    # 5 links móveis.
+    link_radii = [26, 30, 28, 26, 24]
+
+    for i in range(5):
+
+        mesh = cylinder_mesh_between(
+            joint_points[i],
+            joint_points[i+1],
+            link_radii[i],
+        )
+
+        x, y, z, ii, jj, kk = mesh
+
+        traces.append(
+            go.Mesh3d(
+                x=x,
+                y=y,
+                z=z,
+                i=ii,
+                j=jj,
+                k=kk,
+                color="#4682B4",
+                opacity=0.92,
+                flatshading=False,
+                hoverinfo="skip",
+                name=f"Link {i+1}",
+            )
+        )
+
+    # Juntas.
+    jp = np.asarray(joint_points)
+
+    traces.append(
+        go.Scatter3d(
+            x=jp[:,0],
+            y=jp[:,1],
+            z=jp[:,2],
+            mode="markers",
+            marker=dict(
+                size=7,
+                color="#0B2E59",
+            ),
+            name="Juntas",
+            hoverinfo="skip",
+        )
+    )
+
+    # Retângulo direto na J6.
+    ee = T["end_effector"]
+
+    center = ee[:3, 3]
+    ex = ee[:3, 0]
+    ey = ee[:3, 1]
+    ez = ee[:3, 2]
+
+    width_axis = -ex
+    height_axis = ey
+
+    sensors = {
+        "A": center - width_axis*cfg["frame_width"]/2 - height_axis*cfg["frame_height"]/2,
+        "B": center + width_axis*cfg["frame_width"]/2 - height_axis*cfg["frame_height"]/2,
+        "C": center - width_axis*cfg["frame_width"]/2 + height_axis*cfg["frame_height"]/2,
+        "D": center + width_axis*cfg["frame_width"]/2 + height_axis*cfg["frame_height"]/2,
+    }
+
+    corners = np.array([
+        sensors["A"],
+        sensors["B"],
+        sensors["D"],
+        sensors["C"],
+        sensors["A"],
+    ])
+
+    traces.append(
+        go.Scatter3d(
+            x=corners[:,0],
+            y=corners[:,1],
+            z=corners[:,2],
+            mode="lines",
+            line=dict(
+                color="#00B8D9",
+                width=8,
+            ),
+            name="Retângulo",
+            hoverinfo="skip",
+        )
+    )
+
+    traces.append(
+        go.Scatter3d(
+            x=[center[0]],
+            y=[center[1]],
+            z=[center[2]],
+            mode="markers",
+            marker=dict(
+                size=6,
+                color="white",
+                line=dict(
+                    color="#333333",
+                    width=1,
+                ),
+            ),
+            name="Centro / J6",
+            hoverinfo="skip",
+        )
+    )
+
+    # Normal = Z_EE = direção dos lasers.
+    traces.append(
+        go.Scatter3d(
+            x=[center[0], center[0] + ez[0]*130],
+            y=[center[1], center[1] + ez[1]*130],
+            z=[center[2], center[2] + ez[2]*130],
+            mode="lines",
+            line=dict(
+                color="#AB47BC",
+                width=5,
+            ),
+            name="Normal / Laser",
+            hoverinfo="skip",
+        )
+    )
+
+    distances, data = lasers.readings(q, cfg)
+
+    for label, (p, ray, hit) in zip(
+        ["A", "B", "C", "D"],
+        data,
+    ):
+
+        traces.append(
+            go.Scatter3d(
+                x=[p[0]],
+                y=[p[1]],
+                z=[p[2]],
+                mode="markers+text",
+                marker=dict(
+                    size=6,
+                    color="#FFB300",
+                ),
+                text=[label],
+                textposition="top center",
+                textfont=dict(
+                    size=13,
+                    color="#111111",
+                ),
+                name=f"Sensor {label}",
+                hoverinfo="skip",
+                showlegend=False,
+            )
+        )
+
+        if hit is None:
+            hx = [np.nan, np.nan]
+            hy = [np.nan, np.nan]
+            hz = [np.nan, np.nan]
+            mx = [np.nan]
+            my = [np.nan]
+            mz = [np.nan]
+        else:
+            hx = [p[0], hit[0]]
+            hy = [p[1], hit[1]]
+            hz = [p[2], hit[2]]
+            mx = [hit[0]]
+            my = [hit[1]]
+            mz = [hit[2]]
+
+        traces.append(
+            go.Scatter3d(
+                x=hx,
+                y=hy,
+                z=hz,
+                mode="lines",
+                line=dict(
+                    color="#FF6D00",
+                    width=5,
+                ),
+                name=f"Laser {label}",
+                hoverinfo="skip",
+                showlegend=False,
+            )
+        )
+
+        traces.append(
+            go.Scatter3d(
+                x=mx,
+                y=my,
+                z=mz,
+                mode="markers",
+                marker=dict(
+                    size=5,
+                    color="#00C853",
+                ),
+                name=f"Impacto {label}",
+                hoverinfo="skip",
+                showlegend=False,
+            )
+        )
+
+    return traces
+
+
+def make_animated_scene_figure(states, cfg, robot, lasers, frame_count=120):
+
+    if not states:
+        return go.Figure()
+
+    # Reduz/interpola a trajetória para uma animação leve no celular.
+    state_array = np.asarray(states)
+
+    if len(state_array) <= frame_count:
+        samples = state_array
+    else:
+        positions = np.linspace(
+            0.0,
+            len(state_array) - 1.0,
+            frame_count,
+        )
+
+        samples = []
+
+        for pos in positions:
+            i0 = int(math.floor(pos))
+            i1 = min(i0 + 1, len(state_array) - 1)
+            a = pos - i0
+
+            q = (
+                (1.0 - a) * state_array[i0]
+                + a * state_array[i1]
+            )
+
+            samples.append(q)
+
+        samples = np.asarray(samples)
+
+    # --------------------------------------------------------
+    # Geometria fixa: tubo + eixo + base.
+    # --------------------------------------------------------
+
+    fig = go.Figure()
+
+    xx, yy, zz = cylinder_mesh_z(
+        center=(
+            cfg["tube_x"],
+            cfg["tube_y"],
+            cfg["tube_z"],
+        ),
+        radius=cfg["tube_diameter"]/2.0,
+        height=cfg["tube_length"],
+    )
+
+    fig.add_trace(
+        go.Surface(
+            x=xx,
+            y=yy,
+            z=zz,
+            opacity=0.22,
+            colorscale=[
+                [0, "#BDBDBD"],
+                [1, "#BDBDBD"],
+            ],
+            showscale=False,
+            hoverinfo="skip",
+            name="Tubo",
+        )
+    )
+
+    z1 = cfg["tube_z"] - cfg["tube_length"]/2
+    z2 = cfg["tube_z"] + cfg["tube_length"]/2
+
+    fig.add_trace(
+        go.Scatter3d(
+            x=[cfg["tube_x"], cfg["tube_x"]],
+            y=[cfg["tube_y"], cfg["tube_y"]],
+            z=[z1, z2],
+            mode="lines",
+            line=dict(
+                color="#E53935",
+                width=5,
+            ),
+            name="Eixo",
+            hoverinfo="skip",
+        )
+    )
+
+    bx, by, bz = cylinder_mesh_z(
+        center=(
+            cfg["base_x"],
+            cfg["base_y"],
+            cfg["base_z"],
+        ),
+        radius=120,
+        height=180,
+        n_theta=40,
+        n_z=8,
+    )
+
+    fig.add_trace(
+        go.Surface(
+            x=bx,
+            y=by,
+            z=bz,
+            opacity=1.0,
+            colorscale=[
+                [0, "#555555"],
+                [1, "#555555"],
+            ],
+            showscale=False,
+            hoverinfo="skip",
+            name="Base",
+        )
+    )
+
+    dynamic0 = _dynamic_snapshot(
+        samples[0],
+        cfg,
+        robot,
+        lasers,
+    )
+
+    for trace in dynamic0:
+        fig.add_trace(trace)
+
+    static_count = 3
+    dynamic_count = len(dynamic0)
+
+    frames = []
+
+    for idx, q in enumerate(samples):
+
+        dynamic = _dynamic_snapshot(
+            q,
+            cfg,
+            robot,
+            lasers,
+        )
+
+        frames.append(
+            go.Frame(
+                name=f"frame{idx}",
+                data=dynamic,
+                traces=list(
+                    range(
+                        static_count,
+                        static_count + dynamic_count,
+                    )
+                ),
+            )
+        )
+
+    fig.frames = frames
+
+    lo, hi = scene_bounds(cfg, robot)
+
+    fig.update_layout(
+        margin=dict(
+            l=0,
+            r=0,
+            t=5,
+            b=0,
+        ),
+        height=620,
+        paper_bgcolor="white",
+        plot_bgcolor="white",
+        showlegend=False,
+        uirevision="fixed_scene",
+        scene=dict(
+            xaxis=dict(
+                title="X (mm)",
+                range=[
+                    float(lo[0]),
+                    float(hi[0]),
+                ],
+                showgrid=True,
+                zeroline=False,
+            ),
+            yaxis=dict(
+                title="Y (mm)",
+                range=[
+                    float(lo[1]),
+                    float(hi[1]),
+                ],
+                showgrid=True,
+                zeroline=False,
+            ),
+            zaxis=dict(
+                title="Z (mm)",
+                range=[
+                    float(lo[2]),
+                    float(hi[2]),
+                ],
+                showgrid=True,
+                zeroline=False,
+            ),
+            aspectmode="manual",
+            aspectratio=dict(
+                x=1,
+                y=1,
+                z=1.2,
+            ),
+            camera=dict(
+                eye=dict(
+                    x=1.55,
+                    y=1.55,
+                    z=1.15,
+                ),
+            ),
+        ),
+        updatemenus=[
+            dict(
+                type="buttons",
+                showactive=False,
+                x=0.02,
+                y=0.98,
+                xanchor="left",
+                yanchor="top",
+                buttons=[
+                    dict(
+                        label="▶",
+                        method="animate",
+                        args=[
+                            None,
+                            dict(
+                                frame=dict(
+                                    duration=45,
+                                    redraw=True,
+                                ),
+                                transition=dict(
+                                    duration=20,
+                                ),
+                                fromcurrent=True,
+                                mode="immediate",
+                            ),
+                        ],
+                    ),
+                    dict(
+                        label="■",
+                        method="animate",
+                        args=[
+                            [None],
+                            dict(
+                                frame=dict(
+                                    duration=0,
+                                    redraw=False,
+                                ),
+                                transition=dict(
+                                    duration=0,
+                                ),
+                                mode="immediate",
+                            ),
+                        ],
+                    ),
+                ],
+            )
+        ],
+    )
+
+    return fig
+
+
+def make_animated_html(fig, height=650, autoplay=True):
+    """
+    Usa Plotly diretamente no navegador.
+    Isso evita 100+ reruns do Streamlit durante o movimento.
+    """
+
+    fig_json = fig.to_json()
+
+    autoplay_js = """
+        setTimeout(function () {
+            Plotly.animate(
+                gd,
+                null,
+                {
+                    frame: {
+                        duration: 45,
+                        redraw: true
+                    },
+                    transition: {
+                        duration: 20
+                    },
+                    fromcurrent: true,
+                    mode: "immediate"
+                }
+            );
+        }, 250);
+    """ if autoplay else ""
+
+    html = f"""
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+<style>
+html, body {{
+    margin: 0;
+    padding: 0;
+    background: white;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+}}
+#plot {{
+    width: 100%;
+    height: 100%;
+}}
+</style>
+</head>
+<body>
+<div id="plot"></div>
+<script>
+const fig = {fig_json};
+const gd = document.getElementById("plot");
+
+Plotly.newPlot(
+    gd,
+    fig.data,
+    fig.layout,
+    {{
+        responsive: true,
+        displaylogo: false,
+        scrollZoom: false,
+        displayModeBar: false
+    }}
+).then(function () {{
+    Plotly.addFrames(gd, fig.frames || []);
+    {autoplay_js}
+}});
+</script>
+</body>
+</html>
+"""
+
+    return html
 
 
 # ============================================================
@@ -1376,6 +2018,8 @@ with st.sidebar:
         use_container_width=True,
     ):
         st.session_state.q = manual_q
+        st.session_state.trajectory = None
+        st.session_state.trajectory_cfg = None
         st.session_state.status = "Pose manual aplicada"
         st.rerun()
 
@@ -1387,6 +2031,8 @@ with st.sidebar:
             INITIAL_Q_DEG.copy()
         )
         reset_history()
+        st.session_state.trajectory = None
+        st.session_state.trajectory_cfg = None
         st.session_state.status = "Pose inicial restaurada"
         st.rerun()
 
@@ -1415,170 +2061,131 @@ if "stop_requested" not in st.session_state:
 if align_clicked:
 
     st.session_state.stop_requested = False
-    reset_history()
 
-    # O gráfico e os indicadores serão atualizados a cada iteração.
-    scene_placeholder = st.empty()
-    status_placeholder = st.empty()
-    metrics_placeholder = st.empty()
-    graph_placeholder = st.empty()
+    q0 = st.session_state.q.copy()
 
-    controller = Controller(
+    with st.spinner("Calculando trajetória de alinhamento..."):
+
+        states, result = solve_trajectory(
+            q0,
+            cfg,
+            robot,
+            lasers,
+            max_iterations=300,
+        )
+
+    st.session_state.trajectory = states
+    st.session_state.trajectory_cfg = cfg
+    st.session_state.q = result["final_q"]
+
+    # A trajetória é calculada uma única vez no servidor.
+    # A movimentação é reproduzida pelo navegador de forma fluida.
+    animation_fig = make_animated_scene_figure(
+        states,
+        cfg,
         robot,
         lasers,
+        frame_count=120,
+    )
+
+    components.html(
+        make_animated_html(
+            animation_fig,
+            height=650,
+            autoplay=True,
+        ),
+        height=650,
+        scrolling=False,
+    )
+
+    final_q_deg = np.degrees(
+        result["final_q"]
+    )
+
+    d_final, angle_final, max_dist_error_final = current_metrics(
+        robot,
+        lasers,
+        result["final_q"],
         cfg,
     )
 
-    aligned = False
-    failure = None
+    # ----------------------------
+    # RESULTADO
+    # ----------------------------
 
-    max_iterations = 300
-
-    for iteration in range(max_iterations):
-
-        if st.session_state.get(
-            "stop_requested",
-            False,
-        ):
-            failure = "Parado pelo usuário."
-            break
-
-        q = st.session_state.q
-
-        d, angle, max_dist_error = current_metrics(
-            robot,
-            lasers,
-            q,
-            cfg,
-        )
-
-        add_history(
-            iteration,
-            d,
-        )
-
-        scene_fig, _ = make_scene_figure(
-            q,
-            cfg,
-            robot,
-            lasers,
-        )
-
-        scene_placeholder.plotly_chart(
-            scene_fig,
-            width="stretch",
-            config={
-                "scrollZoom": False,
-                "displaylogo": False,
-            },
-        )
-
-        col1, col2, col3, col4 = metrics_placeholder.columns(4)
-
-        with col1:
-            st.metric(
-                "Laser A",
-                (
-                    f"{d[0]:.2f} mm"
-                    if np.isfinite(d[0])
-                    else "—"
-                ),
-            )
-
-        with col2:
-            st.metric(
-                "Laser B",
-                (
-                    f"{d[1]:.2f} mm"
-                    if np.isfinite(d[1])
-                    else "—"
-                ),
-            )
-
-        with col3:
-            st.metric(
-                "Laser C",
-                (
-                    f"{d[2]:.2f} mm"
-                    if np.isfinite(d[2])
-                    else "—"
-                ),
-            )
-
-        with col4:
-            st.metric(
-                "Laser D",
-                (
-                    f"{d[3]:.2f} mm"
-                    if np.isfinite(d[3])
-                    else "—"
-                ),
-            )
-
-        status_placeholder.info(
-            f"Iteração {iteration} • "
-            f"erro de distância máx.: "
-            f"{max_dist_error:.3f} mm • "
-            f"erro angular: {angle:.4f}°"
-        )
-
-        graph_placeholder.plotly_chart(
-            graph_figure(cfg),
-            width="stretch",
-            config={
-                "displaylogo": False,
-            },
-        )
-
-        if not np.all(np.isfinite(d)):
-            failure = (
-                "Um ou mais lasers não atingem o tubo."
-            )
-            break
-
-        if (
-            max_dist_error <= cfg["dist_tol"]
-            and
-            angle <= cfg["align_tol_deg"]
-        ):
-            aligned = True
-            break
-
-        qnew, ok = controller.step(q)
-
-        if not ok:
-            failure = "Falha na atualização da Jacobiana."
-            break
-
-        st.session_state.q = qnew
-
-    if aligned:
-
-        st.session_state.status = (
-            "✓ ALINHADO"
-        )
+    if result["aligned"]:
 
         st.success(
-            f"Alinhado em {iteration} iterações. "
-            f"Erro de distância máx.: "
-            f"{max_dist_error:.3f} mm | "
-            f"Erro angular: {angle:.4f}°"
+            f"✓ ALINHADO em {result['iterations']} iterações • "
+            f"erro de distância máx.: "
+            f"{max_dist_error_final:.3f} mm • "
+            f"erro angular: {angle_final:.4f}°"
         )
 
-    elif failure:
-
-        st.session_state.status = failure
-        st.warning(failure)
+        st.session_state.status = "✓ ALINHADO"
 
     else:
 
-        st.session_state.status = (
-            "Limite de 300 iterações atingido."
-        )
+        message = result["reason"] or "Trajetória encerrada."
 
         st.warning(
-            "Limite de 300 iterações atingido."
+            message
+            + " "
+            + f"Erro de distância máx.: "
+            + f"{max_dist_error_final:.3f} mm • "
+            + f"erro angular: {angle_final:.4f}°"
         )
+
+        st.session_state.status = message
+
+    # ----------------------------
+    # LEITURAS FINAIS
+    # ----------------------------
+
+    c1, c2, c3, c4 = st.columns(4)
+
+    for c, label, value in zip(
+        [c1, c2, c3, c4],
+        ["A", "B", "C", "D"],
+        d_final,
+    ):
+
+        with c:
+            st.metric(
+                f"Laser {label}",
+                (
+                    f"{value:.2f} mm"
+                    if np.isfinite(value)
+                    else "—"
+                ),
+            )
+
+    # ----------------------------
+    # GRÁFICO DA TRAJETÓRIA
+    # ----------------------------
+
+    history = result["history"]
+
+    # Usa o histórico calculado diretamente, sem depender de reruns.
+    original_history = st.session_state.history
+    st.session_state.history = history
+
+    st.plotly_chart(
+        graph_figure(cfg),
+        width="stretch",
+        config={
+            "displaylogo": False,
+        },
+    )
+
+    st.session_state.history = original_history
+
+    st.caption(
+        "A animação é reproduzida no navegador. "
+        "O cálculo da trajetória é feito uma única vez no servidor; "
+        "por isso o movimento não depende de dezenas de atualizações "
+        "do Streamlit."
+    )
 
 # ------------------------------------------------------------
 # VISUALIZAÇÃO NORMAL
