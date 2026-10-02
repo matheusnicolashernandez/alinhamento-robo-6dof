@@ -2214,10 +2214,7 @@ lasers = FourLasers(robot)
 initialize_state(robot)
 
 st.title("Alinhamento automático — Robô 6 DOF + 4 lasers")
-st.caption(
-    "Versão web para celular/tablet. "
-    "O cálculo continua baseado no normal.urdf."
-)
+
 
 # ------------------------------------------------------------
 # SIDEBAR
@@ -2613,7 +2610,4 @@ else:
             },
         )
 
-        st.caption(
-            "O retângulo está acoplado diretamente à J6; "
-            "o Z do end-effector é a normal/perpendicular dos lasers."
-        )
+
