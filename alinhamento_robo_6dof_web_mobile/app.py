@@ -980,18 +980,14 @@ def make_scene_figure(q, cfg, robot, lasers):
                 showgrid=True,
                 zeroline=False,
             ),
-            aspectmode="manual",
-            aspectratio=dict(
-                x=1,
-                y=1,
-                z=1.2,
-            ),
+            aspectmode="cube",
             camera=dict(
                 eye=dict(
                     x=1.55,
                     y=1.55,
-                    z=1.15,
+                    z=1.75,
                 ),
+                projection=dict(type="orthographic"),
             ),
         ),
         showlegend=False,
@@ -1206,69 +1202,34 @@ def solve_trajectory(q0, cfg, robot, lasers, max_iterations=300):
     return states, metrics
 
 
-def _dynamic_snapshot(q, cfg, robot, lasers):
-    """
-    Retorna somente os traces móveis.
-    A ordem é fixa para permitir animação por frames.
+def _dynamic_compact_snapshot(q, cfg, robot, lasers):
+    """Retorna a cena móvel compactada em apenas 7 traces.
+
+    A animação atualiza somente estes traces com Plotly.restyle().
+    Assim, tubo e base permanecem intocados durante o movimento.
     """
 
     T = robot.fk(q, cfg)
 
-    joint_points = [
+    joint_points = np.asarray([
         T["joint_1"][:3, 3],
         T["joint_2"][:3, 3],
         T["joint_3"][:3, 3],
         T["joint_4"][:3, 3],
         T["joint_5"][:3, 3],
         T["joint_6"][:3, 3],
-    ]
+    ])
 
-    traces = []
-
-    # 5 links móveis como linhas grossas.
-    # Scatter3d anima de forma mais robusta que Mesh3d no WebGL móvel.
-    link_widths = [14, 16, 15, 14, 13]
-
+    # Links: uma única linha com separadores None.
+    link_x, link_y, link_z = [], [], []
     for i in range(5):
         p1 = joint_points[i]
-        p2 = joint_points[i+1]
+        p2 = joint_points[i + 1]
+        link_x += [float(p1[0]), float(p2[0]), None]
+        link_y += [float(p1[1]), float(p2[1]), None]
+        link_z += [float(p1[2]), float(p2[2]), None]
 
-        traces.append(
-            go.Scatter3d(
-                x=[p1[0], p2[0]],
-                y=[p1[1], p2[1]],
-                z=[p1[2], p2[2]],
-                mode="lines",
-                line=dict(
-                    color="#4682B4",
-                    width=link_widths[i],
-                ),
-                hoverinfo="skip",
-                name=f"Link {i+1}",
-            )
-        )
-
-    # Juntas.
-    jp = np.asarray(joint_points)
-
-    traces.append(
-        go.Scatter3d(
-            x=jp[:,0],
-            y=jp[:,1],
-            z=jp[:,2],
-            mode="markers",
-            marker=dict(
-                size=7,
-                color="#0B2E59",
-            ),
-            name="Juntas",
-            hoverinfo="skip",
-        )
-    )
-
-    # Retângulo direto na J6.
     ee = T["end_effector"]
-
     center = ee[:3, 3]
     ex = ee[:3, 0]
     ey = ee[:3, 1]
@@ -1284,7 +1245,7 @@ def _dynamic_snapshot(q, cfg, robot, lasers):
         "D": center + width_axis*cfg["frame_width"]/2 + height_axis*cfg["frame_height"]/2,
     }
 
-    corners = np.array([
+    corners = np.asarray([
         sensors["A"],
         sensors["B"],
         sensors["D"],
@@ -1292,419 +1253,262 @@ def _dynamic_snapshot(q, cfg, robot, lasers):
         sensors["A"],
     ])
 
-    traces.append(
-        go.Scatter3d(
-            x=corners[:,0],
-            y=corners[:,1],
-            z=corners[:,2],
-            mode="lines",
-            line=dict(
-                color="#00B8D9",
-                width=8,
-            ),
-            name="Retângulo",
-            hoverinfo="skip",
-        )
-    )
-
-    traces.append(
-        go.Scatter3d(
-            x=[center[0]],
-            y=[center[1]],
-            z=[center[2]],
-            mode="markers",
-            marker=dict(
-                size=6,
-                color="white",
-                line=dict(
-                    color="#333333",
-                    width=1,
-                ),
-            ),
-            name="Centro / J6",
-            hoverinfo="skip",
-        )
-    )
-
-    # Normal = Z_EE = direção dos lasers.
-    traces.append(
-        go.Scatter3d(
-            x=[center[0], center[0] + ez[0]*130],
-            y=[center[1], center[1] + ez[1]*130],
-            z=[center[2], center[2] + ez[2]*130],
-            mode="lines",
-            line=dict(
-                color="#AB47BC",
-                width=5,
-            ),
-            name="Normal / Laser",
-            hoverinfo="skip",
-        )
-    )
-
+    # Lasers: quatro segmentos em uma única linha.
+    laser_x, laser_y, laser_z = [], [], []
+    impact_points = []
     distances, data = lasers.readings(q, cfg)
 
-    for label, (p, ray, hit) in zip(
-        ["A", "B", "C", "D"],
-        data,
-    ):
-
-        traces.append(
-            go.Scatter3d(
-                x=[p[0]],
-                y=[p[1]],
-                z=[p[2]],
-                mode="markers+text",
-                marker=dict(
-                    size=6,
-                    color="#FFB300",
-                ),
-                text=[label],
-                textposition="top center",
-                textfont=dict(
-                    size=13,
-                    color="#111111",
-                ),
-                name=f"Sensor {label}",
-                hoverinfo="skip",
-                showlegend=False,
-            )
-        )
-
+    labels = ["A", "B", "C", "D"]
+    sensor_points = []
+    for label, (p, ray, hit) in zip(labels, data):
+        sensor_points.append(p)
         if hit is None:
-            hx = [np.nan, np.nan]
-            hy = [np.nan, np.nan]
-            hz = [np.nan, np.nan]
-            mx = [np.nan]
-            my = [np.nan]
-            mz = [np.nan]
+            laser_x += [float(p[0]), float(p[0]), None]
+            laser_y += [float(p[1]), float(p[1]), None]
+            laser_z += [float(p[2]), float(p[2]), None]
         else:
-            hx = [p[0], hit[0]]
-            hy = [p[1], hit[1]]
-            hz = [p[2], hit[2]]
-            mx = [hit[0]]
-            my = [hit[1]]
-            mz = [hit[2]]
+            laser_x += [float(p[0]), float(hit[0]), None]
+            laser_y += [float(p[1]), float(hit[1]), None]
+            laser_z += [float(p[2]), float(hit[2]), None]
+            impact_points.append(hit)
 
-        traces.append(
-            go.Scatter3d(
-                x=hx,
-                y=hy,
-                z=hz,
-                mode="lines",
-                line=dict(
-                    color="#FF6D00",
-                    width=5,
-                ),
-                name=f"Laser {label}",
-                hoverinfo="skip",
-                showlegend=False,
-            )
-        )
+    if impact_points:
+        impact = np.asarray(impact_points)
+        impact_x = impact[:, 0].tolist()
+        impact_y = impact[:, 1].tolist()
+        impact_z = impact[:, 2].tolist()
+    else:
+        impact_x = [None]
+        impact_y = [None]
+        impact_z = [None]
 
-        traces.append(
-            go.Scatter3d(
-                x=mx,
-                y=my,
-                z=mz,
-                mode="markers",
-                marker=dict(
-                    size=5,
-                    color="#00C853",
-                ),
-                name=f"Impacto {label}",
-                hoverinfo="skip",
-                showlegend=False,
-            )
-        )
+    return {
+        "links": {"x": link_x, "y": link_y, "z": link_z},
+        "joints": {
+            "x": joint_points[:, 0].astype(float).tolist(),
+            "y": joint_points[:, 1].astype(float).tolist(),
+            "z": joint_points[:, 2].astype(float).tolist(),
+        },
+        "rectangle": {
+            "x": corners[:, 0].astype(float).tolist(),
+            "y": corners[:, 1].astype(float).tolist(),
+            "z": corners[:, 2].astype(float).tolist(),
+        },
+        "center": {
+            "x": [float(center[0])],
+            "y": [float(center[1])],
+            "z": [float(center[2])],
+        },
+        "normal": {
+            "x": [float(center[0]), float(center[0] + ez[0]*130)],
+            "y": [float(center[1]), float(center[1] + ez[1]*130)],
+            "z": [float(center[2]), float(center[2] + ez[2]*130)],
+        },
+        "sensors": {
+            "x": [float(p[0]) for p in sensor_points],
+            "y": [float(p[1]) for p in sensor_points],
+            "z": [float(p[2]) for p in sensor_points],
+        },
+        "sensor_labels": labels,
+        "lasers": {"x": laser_x, "y": laser_y, "z": laser_z},
+        "impacts": {"x": impact_x, "y": impact_y, "z": impact_z},
+    }
 
-    return traces
+
+def _sample_states(states, frame_count):
+    state_array = np.asarray(states, dtype=float)
+    if len(state_array) <= frame_count:
+        return state_array
+
+    positions = np.linspace(0.0, len(state_array) - 1.0, frame_count)
+    samples = []
+    for pos in positions:
+        i0 = int(math.floor(pos))
+        i1 = min(i0 + 1, len(state_array) - 1)
+        a = pos - i0
+        samples.append((1.0 - a) * state_array[i0] + a * state_array[i1])
+    return np.asarray(samples, dtype=float)
 
 
 def make_animated_scene_figure(states, cfg, robot, lasers, frame_count=120):
+    """Cria a figura fixa e os dados móveis separados.
+
+    O navegador anima somente os 7 traces móveis por restyle().
+    Tubo, eixo e base são criados uma vez e nunca entram na animação.
+    """
 
     if not states:
-        return go.Figure()
+        return go.Figure(), []
 
-    # Reduz/interpola a trajetória para uma animação leve no celular.
-    state_array = np.asarray(states)
+    samples = _sample_states(states, frame_count)
+    snapshots = [
+        _dynamic_compact_snapshot(q, cfg, robot, lasers)
+        for q in samples
+    ]
 
-    if len(state_array) <= frame_count:
-        samples = state_array
-    else:
-        positions = np.linspace(
-            0.0,
-            len(state_array) - 1.0,
-            frame_count,
-        )
-
-        samples = []
-
-        for pos in positions:
-            i0 = int(math.floor(pos))
-            i1 = min(i0 + 1, len(state_array) - 1)
-            a = pos - i0
-
-            q = (
-                (1.0 - a) * state_array[i0]
-                + a * state_array[i1]
-            )
-
-            samples.append(q)
-
-        samples = np.asarray(samples)
-
-    # --------------------------------------------------------
-    # Geometria fixa: tubo + eixo + base.
-    # --------------------------------------------------------
-
+    first = snapshots[0]
     fig = go.Figure()
 
+    # --------------------------------------------------------
+    # ESTÁTICOS: tubo + eixo + base
+    # --------------------------------------------------------
+
     xx, yy, zz = cylinder_mesh_z(
-        center=(
-            cfg["tube_x"],
-            cfg["tube_y"],
-            cfg["tube_z"],
-        ),
+        center=(cfg["tube_x"], cfg["tube_y"], cfg["tube_z"]),
         radius=cfg["tube_diameter"]/2.0,
         height=cfg["tube_length"],
-    )
-
-    fig.add_trace(
-        go.Surface(
-            x=xx,
-            y=yy,
-            z=zz,
-            opacity=0.22,
-            colorscale=[
-                [0, "#BDBDBD"],
-                [1, "#BDBDBD"],
-            ],
-            showscale=False,
-            hoverinfo="skip",
-            name="Tubo",
-        )
-    )
-
-    z1 = cfg["tube_z"] - cfg["tube_length"]/2
-    z2 = cfg["tube_z"] + cfg["tube_length"]/2
-
-    fig.add_trace(
-        go.Scatter3d(
-            x=[cfg["tube_x"], cfg["tube_x"]],
-            y=[cfg["tube_y"], cfg["tube_y"]],
-            z=[z1, z2],
-            mode="lines",
-            line=dict(
-                color="#E53935",
-                width=5,
-            ),
-            name="Eixo",
-            hoverinfo="skip",
-        )
-    )
-
-    bx, by, bz = cylinder_mesh_z(
-        center=(
-            cfg["base_x"],
-            cfg["base_y"],
-            cfg["base_z"],
-        ),
-        radius=120,
-        height=180,
-        n_theta=40,
+        n_theta=32,
         n_z=8,
     )
 
-    fig.add_trace(
-        go.Surface(
-            x=bx,
-            y=by,
-            z=bz,
-            opacity=1.0,
-            colorscale=[
-                [0, "#555555"],
-                [1, "#555555"],
-            ],
-            showscale=False,
-            hoverinfo="skip",
-            name="Base",
-        )
+    fig.add_trace(go.Surface(
+        x=xx, y=yy, z=zz,
+        opacity=0.22,
+        colorscale=[[0, "#BDBDBD"], [1, "#BDBDBD"]],
+        showscale=False,
+        hoverinfo="skip",
+        name="Tubo",
+        showlegend=False,
+    ))
+
+    z1 = cfg["tube_z"] - cfg["tube_length"]/2
+    z2 = cfg["tube_z"] + cfg["tube_length"]/2
+    fig.add_trace(go.Scatter3d(
+        x=[cfg["tube_x"], cfg["tube_x"]],
+        y=[cfg["tube_y"], cfg["tube_y"]],
+        z=[z1, z2],
+        mode="lines",
+        line=dict(color="#E53935", width=5),
+        name="Eixo",
+        hoverinfo="skip",
+        showlegend=False,
+    ))
+
+    bx, by, bz = cylinder_mesh_z(
+        center=(cfg["base_x"], cfg["base_y"], cfg["base_z"]),
+        radius=120,
+        height=180,
+        n_theta=32,
+        n_z=6,
     )
+    fig.add_trace(go.Surface(
+        x=bx, y=by, z=bz,
+        opacity=1.0,
+        colorscale=[[0, "#555555"], [1, "#555555"]],
+        showscale=False,
+        hoverinfo="skip",
+        name="Base",
+        showlegend=False,
+    ))
 
-    dynamic0 = _dynamic_snapshot(
-        samples[0],
-        cfg,
-        robot,
-        lasers,
-    )
+    # --------------------------------------------------------
+    # MÓVEIS: exatamente 7 traces
+    # 3 links, joints, retângulo, centro, normal, lasers, impactos
+    # --------------------------------------------------------
 
-    for trace in dynamic0:
-        fig.add_trace(trace)
+    fig.add_trace(go.Scatter3d(
+        x=first["links"]["x"], y=first["links"]["y"], z=first["links"]["z"],
+        mode="lines",
+        line=dict(color="#4682B4", width=15),
+        hoverinfo="skip", name="Robô",
+        showlegend=False,
+    ))
 
-    static_count = 3
-    dynamic_count = len(dynamic0)
+    fig.add_trace(go.Scatter3d(
+        x=first["joints"]["x"], y=first["joints"]["y"], z=first["joints"]["z"],
+        mode="markers",
+        marker=dict(size=7, color="#0B2E59"),
+        hoverinfo="skip", name="Juntas",
+        showlegend=False,
+    ))
 
-    frames = []
+    fig.add_trace(go.Scatter3d(
+        x=first["rectangle"]["x"], y=first["rectangle"]["y"], z=first["rectangle"]["z"],
+        mode="lines",
+        line=dict(color="#00B8D9", width=8),
+        hoverinfo="skip", name="Retângulo",
+        showlegend=False,
+    ))
 
-    for idx, q in enumerate(samples):
+    fig.add_trace(go.Scatter3d(
+        x=first["center"]["x"], y=first["center"]["y"], z=first["center"]["z"],
+        mode="markers",
+        marker=dict(size=6, color="white", line=dict(color="#333333", width=1)),
+        hoverinfo="skip", name="Centro / J6",
+        showlegend=False,
+    ))
 
-        dynamic = _dynamic_snapshot(
-            q,
-            cfg,
-            robot,
-            lasers,
-        )
+    fig.add_trace(go.Scatter3d(
+        x=first["normal"]["x"], y=first["normal"]["y"], z=first["normal"]["z"],
+        mode="lines",
+        line=dict(color="#AB47BC", width=5),
+        hoverinfo="skip", name="Normal / Laser",
+        showlegend=False,
+    ))
 
-        frames.append(
-            go.Frame(
-                name=f"frame{idx}",
-                data=dynamic,
-                traces=list(
-                    range(
-                        static_count,
-                        static_count + dynamic_count,
-                    )
-                ),
-            )
-        )
+    fig.add_trace(go.Scatter3d(
+        x=first["lasers"]["x"], y=first["lasers"]["y"], z=first["lasers"]["z"],
+        mode="lines", line=dict(color="#FF6D00", width=5),
+        hoverinfo="skip", name="Lasers",
+        showlegend=False,
+    ))
 
-    fig.frames = frames
+    fig.add_trace(go.Scatter3d(
+        x=first["impacts"]["x"], y=first["impacts"]["y"], z=first["impacts"]["z"],
+        mode="markers", marker=dict(size=5, color="#00C853"),
+        hoverinfo="skip", name="Impactos",
+        showlegend=False,
+    ))
+
+    # Sensores com labels ficam em um 8º trace móvel. Isso é leve e
+    # permite manter A/B/C/D em cada posição.
+    fig.add_trace(go.Scatter3d(
+        x=first["sensors"]["x"], y=first["sensors"]["y"], z=first["sensors"]["z"],
+        mode="markers+text",
+        marker=dict(size=6, color="#FFB300"),
+        text=first["sensor_labels"],
+        textposition="top center",
+        textfont=dict(size=13, color="#111111"),
+        hoverinfo="skip", name="Sensores",
+        showlegend=False,
+    ))
 
     lo, hi = scene_bounds(cfg, robot)
 
     fig.update_layout(
-        margin=dict(
-            l=0,
-            r=0,
-            t=5,
-            b=0,
-        ),
+        margin=dict(l=0, r=0, t=5, b=0),
         height=620,
         paper_bgcolor="white",
         plot_bgcolor="white",
         showlegend=False,
         uirevision="fixed_scene",
         scene=dict(
-            xaxis=dict(
-                title="X (mm)",
-                range=[
-                    float(lo[0]),
-                    float(hi[0]),
-                ],
-                showgrid=True,
-                zeroline=False,
-            ),
-            yaxis=dict(
-                title="Y (mm)",
-                range=[
-                    float(lo[1]),
-                    float(hi[1]),
-                ],
-                showgrid=True,
-                zeroline=False,
-            ),
-            zaxis=dict(
-                title="Z (mm)",
-                range=[
-                    float(lo[2]),
-                    float(hi[2]),
-                ],
-                showgrid=True,
-                zeroline=False,
-            ),
-            aspectmode="manual",
-            aspectratio=dict(
-                x=1,
-                y=1,
-                z=1.2,
-            ),
+            xaxis=dict(title="X (mm)", range=[float(lo[0]), float(hi[0])], showgrid=True, zeroline=False),
+            yaxis=dict(title="Y (mm)", range=[float(lo[1]), float(hi[1])], showgrid=True, zeroline=False),
+            zaxis=dict(title="Z (mm)", range=[float(lo[2]), float(hi[2])], showgrid=True, zeroline=False),
+            # Mesma escala física nos 3 eixos.
+            aspectmode="cube",
             camera=dict(
-                eye=dict(
-                    x=1.55,
-                    y=1.55,
-                    z=1.15,
-                ),
+                eye=dict(x=1.55, y=1.55, z=2.45),
+                projection=dict(type="orthographic"),
             ),
         ),
-        updatemenus=[
-            dict(
-                type="buttons",
-                showactive=False,
-                x=0.02,
-                y=0.98,
-                xanchor="left",
-                yanchor="top",
-                buttons=[
-                    dict(
-                        label="▶",
-                        method="animate",
-                        args=[
-                            None,
-                            dict(
-                                frame=dict(
-                                    duration=45,
-                                    redraw=True,
-                                ),
-                                transition=dict(
-                                    duration=0,
-                                ),
-                                fromcurrent=True,
-                                mode="immediate",
-                            ),
-                        ],
-                    ),
-                    dict(
-                        label="■",
-                        method="animate",
-                        args=[
-                            [None],
-                            dict(
-                                frame=dict(
-                                    duration=0,
-                                    redraw=False,
-                                ),
-                                transition=dict(
-                                    duration=0,
-                                ),
-                                mode="immediate",
-                            ),
-                        ],
-                    ),
-                ],
-            )
-        ],
     )
 
-    return fig
+    return fig, snapshots
 
 
-def make_animated_html(fig, height=650, autoplay=True):
-    """
-    Usa Plotly diretamente no navegador.
-    Isso evita 100+ reruns do Streamlit durante o movimento.
-    """
+def make_animated_html(fig, snapshots, height=650, autoplay=True):
+    """Anima somente os traces móveis; os estáticos nunca são alterados."""
 
-    fig_json = fig.to_json()
+    import json
+
+    fig_json = fig.to_plotly_json()
+    snapshots_json = json.dumps(snapshots, separators=(",", ":"))
+    fig_json_str = json.dumps(fig_json, separators=(",", ":"))
 
     autoplay_js = """
-        setTimeout(function () {
-            Plotly.animate(
-                gd,
-                null,
-                {
-                    frame: {
-                        duration: 45,
-                        redraw: true
-                    },
-                    transition: {
-                        duration: 20
-                    },
-                    fromcurrent: true,
-                    mode: "immediate"
-                }
-            );
-        }, 250);
+        setTimeout(function () { startAnimation(); }, 350);
     """ if autoplay else ""
 
     html = f"""
@@ -1714,39 +1518,84 @@ def make_animated_html(fig, height=650, autoplay=True):
 <meta charset="utf-8">
 <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
 <style>
-html, body {{
-    margin: 0;
-    padding: 0;
-    background: white;
-    width: 100%;
-    height: 100%;
-    overflow: hidden;
-}}
-#plot {{
-    width: 100%;
-    height: 100%;
-}}
+html, body {{ margin:0; padding:0; background:white; width:100%; height:100%; overflow:hidden; }}
+#wrap {{ position:relative; width:100%; height:100%; }}
+#plot {{ width:100%; height:100%; }}
+.controls {{ position:absolute; top:8px; left:8px; z-index:10; display:flex; gap:6px; }}
+button {{ border:1px solid #bbb; background:white; border-radius:6px; padding:6px 10px; font-size:16px; box-shadow:0 1px 3px rgba(0,0,0,.15); }}
 </style>
 </head>
 <body>
-<div id="plot"></div>
+<div id="wrap">
+  <div id="plot"></div>
+  <div class="controls">
+    <button id="play">▶</button>
+    <button id="stop">■</button>
+  </div>
+</div>
 <script>
-const fig = {fig_json};
-const gd = document.getElementById("plot");
+const fig = {fig_json_str};
+const frames = {snapshots_json};
+const gd = document.getElementById('plot');
+let timer = null;
+let index = 0;
+let playing = false;
 
-Plotly.newPlot(
-    gd,
-    fig.data,
-    fig.layout,
-    {{
-        responsive: true,
-        displaylogo: false,
-        scrollZoom: false,
-        displayModeBar: false
+const STATIC_COUNT = 3;
+const LINK_I = 3;
+const JOINT_I = 4;
+const RECT_I = 5;
+const CENTER_I = 6;
+const NORMAL_I = 7;
+const LASER_I = 8;
+const IMPACT_I = 9;
+const SENSOR_I = 10;
+
+function applyFrame(k) {{
+  const f = frames[k];
+  Plotly.restyle(gd, {{
+    x: [f.links.x, f.joints.x, f.rectangle.x, f.center.x, f.normal.x, f.lasers.x, f.impacts.x, f.sensors.x],
+    y: [f.links.y, f.joints.y, f.rectangle.y, f.center.y, f.normal.y, f.lasers.y, f.impacts.y, f.sensors.y],
+    z: [f.links.z, f.joints.z, f.rectangle.z, f.center.z, f.normal.z, f.lasers.z, f.impacts.z, f.sensors.z]
+  }}, [LINK_I, JOINT_I, RECT_I, CENTER_I, NORMAL_I, LASER_I, IMPACT_I, SENSOR_I]);
+}}
+
+function stopAnimation() {{
+  playing = false;
+  if (timer !== null) {{
+    clearInterval(timer);
+    timer = null;
+  }}
+}}
+
+function startAnimation() {{
+  if (!frames.length) return;
+  stopAnimation();
+  playing = true;
+  index = 0;
+  applyFrame(index);
+  timer = setInterval(function() {{
+    if (!playing) return;
+    index += 1;
+    if (index >= frames.length) {{
+      index = frames.length - 1;
+      applyFrame(index);
+      stopAnimation();
+      return;
     }}
-).then(function () {{
-    Plotly.addFrames(gd, fig.frames || []);
-    {autoplay_js}
+    applyFrame(index);
+  }}, 45);
+}}
+
+Plotly.newPlot(gd, fig.data, fig.layout, {{
+  responsive:true,
+  displaylogo:false,
+  scrollZoom:false,
+  displayModeBar:false
+}}).then(function() {{
+  document.getElementById('play').onclick = startAnimation;
+  document.getElementById('stop').onclick = stopAnimation;
+  {autoplay_js}
 }});
 </script>
 </body>
@@ -2067,7 +1916,7 @@ if align_clicked:
 
     # A trajetória é calculada uma única vez no servidor.
     # A movimentação é reproduzida pelo navegador de forma fluida.
-    animation_fig = make_animated_scene_figure(
+    animation_fig, animation_snapshots = make_animated_scene_figure(
         states,
         cfg,
         robot,
@@ -2078,6 +1927,7 @@ if align_clicked:
     components.html(
         make_animated_html(
             animation_fig,
+            animation_snapshots,
             height=650,
             autoplay=True,
         ),
