@@ -6,6 +6,7 @@ from pathlib import Path
 
 import numpy as np
 import plotly.graph_objects as go
+import plotly.io as pio
 import streamlit as st
 import streamlit.components.v1 as components
 
@@ -2414,61 +2415,72 @@ else:
             lasers,
         )
 
-        # Cena inicial em um iframe Plotly autocontido.
-        # A câmera é salva no navegador e reaplicada após o rerun
-        # provocado por "Aplicar juntas", sem alterar a figura/visual.
-        scene_html = scene_fig.to_html(
-            full_html=False,
-            include_plotlyjs=True,
-            config={
-                "scrollZoom": True,
-                "displaylogo": False,
-                "displayModeBar": True,
-            },
-            div_id="main_robot_scene",
-        )
-        camera_key = "robot_scene_camera_v28"
-        camera_script = f"""
+        # Cena inicial: o gráfico nasce já com a última câmera salva.
+        # Assim não há renderização intermediária na câmera padrão.
+        fig_json = scene_fig.to_json()
+        camera_key = "robot_scene_camera_v29"
+        plotly_js = pio.get_plotlyjs()
+        scene_html = f"""
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>html, body {{ margin:0; padding:0; width:100%; height:100%; overflow:hidden; }}</style>
+<script>{plotly_js}</script>
+</head>
+<body>
+<div id="main_robot_scene" style="width:100%;height:650px;"></div>
 <script>
 (function() {{
-    const key = {camera_key!r};
+    const fig = {fig_json};
     const gd = document.getElementById("main_robot_scene");
-    if (!gd) return;
+    const key = {camera_key!r};
 
-    function saveCamera() {{
-        try {{
-            if (gd.layout && gd.layout.scene && gd.layout.scene.camera) {{
-                localStorage.setItem(key, JSON.stringify(gd.layout.scene.camera));
+    // Recupera a câmera ANTES de criar o gráfico.
+    try {{
+        const raw = localStorage.getItem(key);
+        if (raw) {{
+            const camera = JSON.parse(raw);
+            fig.layout = fig.layout || {{}};
+            fig.layout.scene = fig.layout.scene || {{}};
+            fig.layout.scene.camera = camera;
+        }}
+    }} catch (e) {{}}
+
+    Plotly.newPlot(
+        gd,
+        fig.data,
+        fig.layout,
+        {{
+            responsive: true,
+            scrollZoom: true,
+            displaylogo: false,
+            displayModeBar: true,
+            doubleClick: false
+        }},
+    ).then(function() {{
+        gd.on('plotly_relayout', function(evt) {{
+            if (!evt) return;
+            const changed = Object.keys(evt).some(function(k) {{
+                return k === 'scene.camera' || k.indexOf('scene.camera.') === 0;
+            }});
+            if (changed) {{
+                try {{
+                    localStorage.setItem(
+                        key,
+                        JSON.stringify(gd.layout.scene.camera)
+                    );
+                }} catch (e) {{}}
             }}
-        }} catch (e) {{}}
-    }}
-
-    function restoreCamera() {{
-        try {{
-            const raw = localStorage.getItem(key);
-            if (!raw) return;
-            const cam = JSON.parse(raw);
-            Plotly.relayout(gd, {{"scene.camera": cam}});
-        }} catch (e) {{}}
-    }}
-
-    gd.on('plotly_relayout', function(evt) {{
-        if (!evt) return;
-        const changed = Object.keys(evt).some(function(k) {{
-            return k === 'scene.camera' || k.indexOf('scene.camera.') === 0;
         }});
-        if (changed) saveCamera();
     }});
-
-    setTimeout(function() {{
-        restoreCamera();
-        saveCamera();
-    }}, 0);
 }})();
 </script>
+</body>
+</html>
 """
         components.html(
-            scene_html + camera_script,
+            scene_html,
             height=650,
             scrolling=False,
         )
