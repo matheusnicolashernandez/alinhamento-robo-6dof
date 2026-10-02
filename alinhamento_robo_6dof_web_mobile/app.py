@@ -2195,20 +2195,6 @@ st.caption(
 )
 
 # ------------------------------------------------------------
-# ATUALIZAÇÃO DAS JUNTAS EM TEMPO REAL
-# ------------------------------------------------------------
-
-def update_joint_from_widget(i):
-    """Atualiza somente a pose quando o usuário altera uma junta."""
-    value_deg = float(st.session_state[f"q_deg_{i}"])
-    st.session_state.q[i] = math.radians(value_deg)
-    st.session_state.trajectory = None
-    st.session_state.trajectory_cfg = None
-    st.session_state.last_result = None
-    st.session_state.status = "Pose manual em edição"
-
-
-# ------------------------------------------------------------
 # SIDEBAR
 # ------------------------------------------------------------
 
@@ -2325,6 +2311,18 @@ with st.sidebar:
 
     limits = robot.limits()
 
+    def update_joint_from_widgets():
+        """Atualiza a pose somente quando um campo de junta é alterado."""
+        q_deg_live = np.array(
+            [st.session_state[f"q_deg_{j}"] for j in range(len(JOINT_LABELS))],
+            dtype=float,
+        )
+        st.session_state.q = np.radians(q_deg_live)
+        st.session_state.trajectory = None
+        st.session_state.trajectory_cfg = None
+        st.session_state.last_result = None
+        st.session_state.status = "Pose manual em edição"
+
     q_deg = []
 
     for i, label in enumerate(JOINT_LABELS):
@@ -2338,22 +2336,18 @@ with st.sidebar:
             ),
             step=1.0,
             key=f"q_deg_{i}",
-            on_change=update_joint_from_widget,
-            args=(i,),
+            on_change=update_joint_from_widgets,
         )
 
         q_deg.append(value)
-
-    st.caption("As juntas são atualizadas diretamente na visualização.")
 
     if st.button(
         "↺ Resetar pose",
         use_container_width=True,
     ):
-        reset_q = np.radians(INITIAL_Q_DEG.copy())
-        st.session_state.q = reset_q
-        for i, value in enumerate(INITIAL_Q_DEG):
-            st.session_state[f"q_deg_{i}"] = float(value)
+        st.session_state.q = np.radians(
+            INITIAL_Q_DEG.copy()
+        )
         reset_history()
         st.session_state.trajectory = None
         st.session_state.trajectory_cfg = None
