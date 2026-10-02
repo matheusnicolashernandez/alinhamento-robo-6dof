@@ -1563,7 +1563,7 @@ def make_animated_scene_figure(
 
     Estratégia:
     - Os traces estáticos (tubo, eixo e base) são criados uma única vez.
-    - O tubo usa Mesh3d estático para maior estabilidade no WebGL móvel.
+    - O tubo usa a malha Surface estática, como na versão original.
     - Os traces móveis são atualizados exclusivamente por Plotly.restyle().
     - Não usamos Plotly Frames, Plotly.animate() ou redraw da cena 3D.
     """
@@ -1583,7 +1583,9 @@ def make_animated_scene_figure(
     # --------------------------------------------------------
     fig = go.Figure()
 
-    tx, ty, tz, ti, tj, tk = cylinder_mesh_z_mesh3d(
+    # Trace 0: tubo estático usando a malha Surface que já funcionava bem
+    # na versão original. Ele não participa de nenhuma restyle da animação.
+    tx, ty, tz = cylinder_mesh_z(
         center=(
             cfg["tube_x"],
             cfg["tube_y"],
@@ -1593,21 +1595,21 @@ def make_animated_scene_figure(
         height=cfg["tube_length"],
     )
 
-    # Trace 0: tubo estático. Não entra em nenhuma restyle da animação.
     fig.add_trace(
-        go.Mesh3d(
+        go.Surface(
             x=tx,
             y=ty,
             z=tz,
-            i=ti,
-            j=tj,
-            k=tk,
             opacity=0.22,
-            color="#BDBDBD",
+            colorscale=[
+                [0, "#BDBDBD"],
+                [1, "#BDBDBD"],
+            ],
+            showscale=False,
             hoverinfo="skip",
             name="Tubo",
-            flatshading=False,
-            lighting=dict(ambient=0.75, diffuse=0.25, specular=0.05),
+            connectgaps=True,
+            hidesurface=False,
         )
     )
 
