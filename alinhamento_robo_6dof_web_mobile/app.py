@@ -6,7 +6,6 @@ from pathlib import Path
 import numpy as np
 import plotly.graph_objects as go
 import streamlit as st
-import streamlit.components.v1 as components
 
 
 # ============================================================
@@ -1016,9 +1015,9 @@ def make_scene_figure(q, cfg, robot, lasers):
             aspectratio=dict(x=1, y=1, z=1),
             camera=dict(
                 eye=dict(
-                    x=1.55,
-                    y=1.55,
-                    z=1.75,
+                    x=0.65,
+                    y=0.65,
+                    z=3.80,
                 ),
                 projection=dict(type="orthographic"),
             ),
@@ -1157,7 +1156,7 @@ def current_metrics(robot, lasers, q, cfg):
 
 
 # ============================================================
-# TRAJETÓRIA PRÉ-CALCULADA + ANIMAÇÃO NO NAVEGADOR
+# TRAJETÓRIA PRÉ-CALCULADA
 # ============================================================
 
 def solve_trajectory(q0, cfg, robot, lasers, max_iterations=300):
@@ -1204,8 +1203,7 @@ def solve_trajectory(q0, cfg, robot, lasers, max_iterations=300):
 
         if (
             max_dist_error <= cfg["dist_tol"]
-            and
-            angle <= cfg["align_tol_deg"]
+            and angle <= cfg["align_tol_deg"]
         ):
             aligned = True
             break
@@ -1235,127 +1233,8 @@ def solve_trajectory(q0, cfg, robot, lasers, max_iterations=300):
     return states, metrics
 
 
-def _dynamic_compact_snapshot(q, cfg, robot, lasers):
-    """Retorna a cena móvel compactada em estruturas simples de listas e floats.
-
-    A animação em Canvas usa somente estes dados móveis.
-    Assim, tubo e base permanecem independentes do movimento.
-    """
-
-    T = robot.fk(q, cfg)
-
-    joint_points = np.asarray([
-        T["joint_1"][:3, 3],
-        T["joint_2"][:3, 3],
-        T["joint_3"][:3, 3],
-        T["joint_4"][:3, 3],
-        T["joint_5"][:3, 3],
-        T["joint_6"][:3, 3],
-    ])
-
-    # Links: uma única linha com separadores None.
-    link_x, link_y, link_z = [], [], []
-    for i in range(5):
-        p1 = joint_points[i]
-        p2 = joint_points[i + 1]
-        link_x += [float(p1[0]), float(p2[0]), None]
-        link_y += [float(p1[1]), float(p2[1]), None]
-        link_z += [float(p1[2]), float(p2[2]), None]
-
-    ee = T["end_effector"]
-    center = ee[:3, 3]
-    ex = ee[:3, 0]
-    ey = ee[:3, 1]
-    ez = ee[:3, 2]
-
-    width_axis = -ex
-    height_axis = ey
-
-    sensors = {
-        "A": center - width_axis*cfg["frame_width"]/2 - height_axis*cfg["frame_height"]/2,
-        "B": center + width_axis*cfg["frame_width"]/2 - height_axis*cfg["frame_height"]/2,
-        "C": center - width_axis*cfg["frame_width"]/2 + height_axis*cfg["frame_height"]/2,
-        "D": center + width_axis*cfg["frame_width"]/2 + height_axis*cfg["frame_height"]/2,
-    }
-
-    corners = np.asarray([
-        sensors["A"],
-        sensors["B"],
-        sensors["D"],
-        sensors["C"],
-        sensors["A"],
-    ])
-
-    # Lasers: quatro segmentos em uma única linha.
-    laser_x, laser_y, laser_z = [], [], []
-    impact_points = []
-    distances, data = lasers.readings(q, cfg)
-
-    labels = ["A", "B", "C", "D"]
-    sensor_points = []
-    for label, (p, ray, hit) in zip(labels, data):
-        sensor_points.append(p)
-        if hit is None:
-            laser_x += [float(p[0]), float(p[0]), None]
-            laser_y += [float(p[1]), float(p[1]), None]
-            laser_z += [float(p[2]), float(p[2]), None]
-        else:
-            laser_x += [float(p[0]), float(hit[0]), None]
-            laser_y += [float(p[1]), float(hit[1]), None]
-            laser_z += [float(p[2]), float(hit[2]), None]
-            impact_points.append(hit)
-
-    if impact_points:
-        impact = np.asarray(impact_points)
-        impact_x = impact[:, 0].tolist()
-        impact_y = impact[:, 1].tolist()
-        impact_z = impact[:, 2].tolist()
-    else:
-        impact_x = [None]
-        impact_y = [None]
-        impact_z = [None]
-
-    return {
-        "links": {"x": link_x, "y": link_y, "z": link_z},
-        "joints": {
-            "x": joint_points[:, 0].astype(float).tolist(),
-            "y": joint_points[:, 1].astype(float).tolist(),
-            "z": joint_points[:, 2].astype(float).tolist(),
-        },
-        "rectangle": {
-            "x": corners[:, 0].astype(float).tolist(),
-            "y": corners[:, 1].astype(float).tolist(),
-            "z": corners[:, 2].astype(float).tolist(),
-        },
-        "center": {
-            "x": [float(center[0])],
-            "y": [float(center[1])],
-            "z": [float(center[2])],
-        },
-        "normal": {
-            "x": [float(center[0]), float(center[0] + ez[0]*130)],
-            "y": [float(center[1]), float(center[1] + ez[1]*130)],
-            "z": [float(center[2]), float(center[2] + ez[2]*130)],
-        },
-        "sensors": {
-            "x": [float(p[0]) for p in sensor_points],
-            "y": [float(p[1]) for p in sensor_points],
-            "z": [float(p[2]) for p in sensor_points],
-        },
-        "sensor_labels": labels,
-        "lasers": {"x": laser_x, "y": laser_y, "z": laser_z},
-        "impacts": {"x": impact_x, "y": impact_y, "z": impact_z},
-    }
-
-
 def _sample_states(states, frame_count):
-    """Interpola a trajetória para exatamente ``frame_count`` frames.
-
-    O solver normalmente produz poucos estados (por exemplo, 12 iterações).
-    A versão anterior só interpolava quando havia estados demais e, portanto,
-    uma trajetória curta continuava com poucos frames, deixando o movimento
-    visual muito brusco. Aqui sempre interpolamos para a quantidade pedida.
-    """
+    """Interpola os estados para uma reprodução visual mais suave."""
     state_array = np.asarray(states, dtype=float)
 
     if state_array.ndim != 2 or state_array.shape[0] == 0:
@@ -1365,7 +1244,6 @@ def _sample_states(states, frame_count):
         return state_array[[0]].copy()
 
     frame_count = int(max(frame_count, 2))
-
     positions = np.linspace(0.0, state_array.shape[0] - 1.0, frame_count)
     samples = np.empty((frame_count, state_array.shape[1]), dtype=float)
 
@@ -1378,498 +1256,47 @@ def _sample_states(states, frame_count):
     return samples
 
 
-def make_animated_scene_figure(states, cfg, robot, lasers, frame_count=80):
-    """Cria uma cena com 3 traces estáticos e 8 traces móveis.
+def animate_server_side(states, cfg, robot, lasers, frame_count=20, delay_ms=500):
+    """Reproduz a trajetória usando o próprio Streamlit, sem JavaScript/WebGL frames.
 
-    A animação é feita com Frames do próprio Plotly e com ``traces`` explícitos.
-    Isso é importante: cada frame atualiza SOMENTE os objetos móveis e nunca
-    substitui ou recria tubo, eixo e base.
-
-    Além disso, todos os pontos que pertencem ao conjunto móvel (robô,
-    retângulo, sensores e lasers) são calculados a partir da MESMA pose dentro
-    de cada frame. Assim A/B/C/D não podem ficar em uma pose diferente da
-    moldura durante a reprodução.
+    A cada frame a cena COMPLETA é recriada. Portanto tubo, base, robô,
+    retângulo e sensores são sempre calculados e enviados juntos.
+    Essa abordagem é mais lenta que uma animação client-side, mas é muito
+    mais previsível dentro de um iframe do Streamlit Cloud em desktop/celular.
     """
-
-    if not states:
-        return go.Figure(), []
+    import time
 
     samples = _sample_states(states, frame_count)
-    snapshots = [
-        _dynamic_compact_snapshot(q, cfg, robot, lasers)
-        for q in samples
-    ]
+    if samples.size == 0:
+        return 0
 
-    first = snapshots[0]
-    fig = go.Figure()
+    scene_placeholder = st.empty()
+    progress_placeholder = st.empty()
 
-    # --------------------------------------------------------
-    # ESTÁTICOS: nunca entram nos frames
-    # --------------------------------------------------------
+    total = len(samples)
+    delay = max(0.05, float(delay_ms) / 1000.0)
 
-    tx, ty, tz = cylinder_wireframe_z(
-        center=(cfg["tube_x"], cfg["tube_y"], cfg["tube_z"]),
-        radius=cfg["tube_diameter"]/2.0,
-        height=cfg["tube_length"],
-        n_theta=64,
-        n_rings=7,
-        n_generators=20,
-    )
+    for index, q in enumerate(samples):
+        scene_fig, _ = make_scene_figure(q, cfg, robot, lasers)
 
-    fig.add_trace(go.Scatter3d(
-        x=tx, y=ty, z=tz,
-        mode="lines",
-        line=dict(color="#9E9E9E", width=2),
-        opacity=0.42,
-        hoverinfo="skip",
-        name="Tubo",
-        showlegend=False,
-    ))
-
-    z1 = cfg["tube_z"] - cfg["tube_length"]/2
-    z2 = cfg["tube_z"] + cfg["tube_length"]/2
-    fig.add_trace(go.Scatter3d(
-        x=[cfg["tube_x"], cfg["tube_x"]],
-        y=[cfg["tube_y"], cfg["tube_y"]],
-        z=[z1, z2],
-        mode="lines",
-        line=dict(color="#E53935", width=5),
-        hoverinfo="skip",
-        name="Eixo",
-        showlegend=False,
-    ))
-
-    bx, by, bz = cylinder_wireframe_z(
-        center=(cfg["base_x"], cfg["base_y"], cfg["base_z"]),
-        radius=120,
-        height=180,
-        n_theta=64,
-        n_rings=5,
-        n_generators=24,
-    )
-    fig.add_trace(go.Scatter3d(
-        x=bx, y=by, z=bz,
-        mode="lines",
-        line=dict(color="#303030", width=8),
-        opacity=1.0,
-        hoverinfo="skip",
-        name="Base",
-        showlegend=False,
-    ))
-
-    # Índices fixos dos traces móveis.
-    # 3 = links, 4 = juntas, 5 = retângulo, 6 = centro,
-    # 7 = normal, 8 = lasers, 9 = impactos, 10 = sensores.
-    fig.add_trace(go.Scatter3d(
-        x=first["links"]["x"], y=first["links"]["y"], z=first["links"]["z"],
-        mode="lines",
-        line=dict(color="#4682B4", width=15),
-        hoverinfo="skip", showlegend=False,
-    ))
-    fig.add_trace(go.Scatter3d(
-        x=first["joints"]["x"], y=first["joints"]["y"], z=first["joints"]["z"],
-        mode="markers",
-        marker=dict(size=7, color="#0B2E59"),
-        hoverinfo="skip", showlegend=False,
-    ))
-    fig.add_trace(go.Scatter3d(
-        x=first["rectangle"]["x"], y=first["rectangle"]["y"], z=first["rectangle"]["z"],
-        mode="lines",
-        line=dict(color="#00B8D9", width=8),
-        hoverinfo="skip", showlegend=False,
-    ))
-    fig.add_trace(go.Scatter3d(
-        x=first["center"]["x"], y=first["center"]["y"], z=first["center"]["z"],
-        mode="markers",
-        marker=dict(size=6, color="white", line=dict(color="#333333", width=1)),
-        hoverinfo="skip", showlegend=False,
-    ))
-    fig.add_trace(go.Scatter3d(
-        x=first["normal"]["x"], y=first["normal"]["y"], z=first["normal"]["z"],
-        mode="lines",
-        line=dict(color="#AB47BC", width=5),
-        hoverinfo="skip", showlegend=False,
-    ))
-    fig.add_trace(go.Scatter3d(
-        x=first["lasers"]["x"], y=first["lasers"]["y"], z=first["lasers"]["z"],
-        mode="lines",
-        line=dict(color="#FF6D00", width=5),
-        hoverinfo="skip", showlegend=False,
-    ))
-    fig.add_trace(go.Scatter3d(
-        x=first["impacts"]["x"], y=first["impacts"]["y"], z=first["impacts"]["z"],
-        mode="markers",
-        marker=dict(size=5, color="#00C853"),
-        hoverinfo="skip", showlegend=False,
-    ))
-    fig.add_trace(go.Scatter3d(
-        x=first["sensors"]["x"], y=first["sensors"]["y"], z=first["sensors"]["z"],
-        mode="markers+text",
-        marker=dict(size=6, color="#FFB300"),
-        text=first["sensor_labels"],
-        textposition="top center",
-        textfont=dict(size=13, color="#111111"),
-        hoverinfo="skip", showlegend=False,
-    ))
-
-    # --------------------------------------------------------
-    # FRAMES: apenas os 8 traces móveis
-    # --------------------------------------------------------
-
-    mobile_indices = [3, 4, 5, 6, 7, 8, 9, 10]
-    frames = []
-
-    for k, s in enumerate(snapshots):
-        frame_data = [
-            go.Scatter3d(x=s["links"]["x"], y=s["links"]["y"], z=s["links"]["z"]),
-            go.Scatter3d(x=s["joints"]["x"], y=s["joints"]["y"], z=s["joints"]["z"]),
-            go.Scatter3d(x=s["rectangle"]["x"], y=s["rectangle"]["y"], z=s["rectangle"]["z"]),
-            go.Scatter3d(x=s["center"]["x"], y=s["center"]["y"], z=s["center"]["z"]),
-            go.Scatter3d(x=s["normal"]["x"], y=s["normal"]["y"], z=s["normal"]["z"]),
-            go.Scatter3d(x=s["lasers"]["x"], y=s["lasers"]["y"], z=s["lasers"]["z"]),
-            go.Scatter3d(x=s["impacts"]["x"], y=s["impacts"]["y"], z=s["impacts"]["z"]),
-            go.Scatter3d(
-                x=s["sensors"]["x"],
-                y=s["sensors"]["y"],
-                z=s["sensors"]["z"],
-                text=s["sensor_labels"],
-            ),
-        ]
-        frames.append(
-            go.Frame(
-                name=f"frame_{k}",
-                data=frame_data,
-                traces=mobile_indices,
-            )
+        scene_placeholder.plotly_chart(
+            scene_fig,
+            width="stretch",
+            config={
+                "displaylogo": False,
+                "scrollZoom": False,
+            },
         )
 
-    fig.frames = frames
+        progress_placeholder.caption(
+            f"Simulação: quadro {index + 1}/{total}"
+        )
 
-    lo, hi = scene_bounds(cfg, robot)
+        if index < total - 1:
+            time.sleep(delay)
 
-    fig.update_layout(
-        margin=dict(l=0, r=0, t=5, b=0),
-        height=620,
-        paper_bgcolor="white",
-        plot_bgcolor="white",
-        showlegend=False,
-        uirevision="fixed_scene_v3",
-        scene=dict(
-            xaxis=dict(
-                title="X (mm)",
-                range=[float(lo[0]), float(hi[0])],
-                showgrid=True,
-                zeroline=False,
-            ),
-            yaxis=dict(
-                title="Y (mm)",
-                range=[float(lo[1]), float(hi[1])],
-                showgrid=True,
-                zeroline=False,
-            ),
-            zaxis=dict(
-                title="Z (mm)",
-                range=[float(lo[2]), float(hi[2])],
-                showgrid=True,
-                zeroline=False,
-            ),
-            # Igualdade física entre X/Y/Z. O modo cube evita que o browser
-            # altere a razão visual entre as unidades.
-            aspectmode="cube",
-            camera=dict(
-                eye=dict(x=1.10, y=1.10, z=3.60),
-                center=dict(x=0.0, y=0.0, z=0.0),
-                up=dict(x=0.0, y=0.0, z=1.0),
-                projection=dict(type="orthographic"),
-            ),
-        ),
-    )
-
-    return fig, frames
-
-
-def make_canvas_animation_html(snapshots, cfg, robot, height=680, autoplay=True, frame_delay_ms=550):
-    """Animação 3D desenhada em Canvas 2D, sem WebGL/Plotly.
-
-    Esta é uma escolha deliberada para a reprodução no celular. A cena inteira
-    é redesenhada a cada frame: tubo, base e robô não dependem de traces WebGL
-    persistentes. Assim nenhum objeto pode desaparecer durante o Play.
-    A projeção é ortográfica e usa a mesma escala para X/Y/Z.
-    """
-    import json
-
-    if not snapshots:
-        return ""
-
-    lo, hi = scene_bounds(cfg, robot)
-    scene_center = ((lo + hi) / 2.0).astype(float)
-    half = float(np.max(hi - lo)) / 2.0 * 1.08
-
-    static_cfg = {
-        "tube_x": float(cfg["tube_x"]),
-        "tube_y": float(cfg["tube_y"]),
-        "tube_z": float(cfg["tube_z"]),
-        "tube_radius": float(cfg["tube_diameter"] / 2.0),
-        "tube_length": float(cfg["tube_length"]),
-        "base_x": float(cfg["base_x"]),
-        "base_y": float(cfg["base_y"]),
-        "base_z": float(cfg["base_z"]),
-        "base_radius": 120.0,
-        "base_height": 180.0,
-    }
-
-    payload = {
-        "frames": snapshots,
-        "static": static_cfg,
-        "scene_center": scene_center.tolist(),
-        "half": half,
-    }
-
-    def _json_safe(value):
-        """Converte recursivamente numpy/scalars e valores não finitos para JSON puro."""
-        if isinstance(value, dict):
-            return {str(k): _json_safe(v) for k, v in value.items()}
-        if isinstance(value, (list, tuple)):
-            return [_json_safe(v) for v in value]
-        if isinstance(value, np.ndarray):
-            return _json_safe(value.tolist())
-        if isinstance(value, np.generic):
-            value = value.item()
-            return _json_safe(value)
-        if isinstance(value, float):
-            return value if math.isfinite(value) else None
-        if isinstance(value, (str, int, bool)) or value is None:
-            return value
-        return str(value)
-
-    # O Streamlit Cloud pode usar versões diferentes de NumPy/Python.
-    # Não passamos nenhum numpy scalar/array diretamente para json.dumps.
-    # Também desabilitamos NaN/Infinity no JSON final para evitar TypeError.
-    payload = _json_safe(payload)
-    data_json = json.dumps(payload, separators=(",", ":"), allow_nan=False)
-    autoplay_js = "setTimeout(startAnimation, 500);" if autoplay else ""
-
-    return f'''<!DOCTYPE html>
-<html>
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
-<style>
-html,body {{ margin:0; padding:0; background:#fff; width:100%; height:100%; overflow:hidden; font-family:Arial,sans-serif; }}
-#wrap {{ position:relative; width:100%; height:100%; background:#fff; }}
-#canvas {{ width:100%; height:100%; display:block; touch-action:none; }}
-#controls {{ position:absolute; top:10px; left:10px; z-index:10; display:flex; gap:7px; }}
-button {{ border:1px solid #aaa; background:#fff; color:#222; border-radius:7px; padding:8px 13px; font-size:15px; box-shadow:0 1px 4px rgba(0,0,0,.12); }}
-#progress {{ position:absolute; left:12px; bottom:10px; z-index:10; background:rgba(255,255,255,.86); padding:5px 8px; border-radius:6px; font-size:13px; color:#444; }}
-</style>
-</head>
-<body>
-<div id="wrap">
-<canvas id="canvas"></canvas>
-<div id="controls">
-  <button id="play">▶ Play</button>
-  <button id="stop">■ Parar</button>
-</div>
-<div id="progress"></div>
-</div>
-<script>
-const DATA = {data_json};
-const frames = DATA.frames || [];
-const S = DATA.static;
-const sceneCenter = DATA.scene_center;
-const half = DATA.half;
-const canvas = document.getElementById('canvas');
-const ctx = canvas.getContext('2d');
-const progress = document.getElementById('progress');
-let playing = false;
-let token = 0;
-let current = 0;
-let W = 1, H = 1, scale = 1;
-
-// Câmera ortográfica fixa. Unidades iguais nos 3 eixos.
-const eye = normalize([1.10, 1.10, 3.60]);
-const worldUp = [0,0,1];
-const right = normalize(cross(eye, worldUp));
-const up = normalize(cross(right, eye));
-
-function normalize(a) {{
-  const n = Math.hypot(a[0],a[1],a[2]) || 1;
-  return [a[0]/n,a[1]/n,a[2]/n];
-}}
-function cross(a,b) {{ return [a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]]; }}
-function dot(a,b) {{ return a[0]*b[0]+a[1]*b[1]+a[2]*b[2]; }}
-function sub(a,b) {{ return [a[0]-b[0],a[1]-b[1],a[2]-b[2]]; }}
-
-function resize() {{
-  const dpr = Math.min(window.devicePixelRatio || 1, 2);
-  const rect = canvas.getBoundingClientRect();
-  W = Math.max(1, rect.width);
-  H = Math.max(1, rect.height);
-  canvas.width = Math.round(W*dpr);
-  canvas.height = Math.round(H*dpr);
-  ctx.setTransform(dpr,0,0,dpr,0,0);
-  scale = Math.min((W-50)/(2*half), (H-60)/(2*half));
-  drawFrame(current);
-}}
-
-function project(p) {{
-  const r = sub(p, sceneCenter);
-  const px = dot(r,right);
-  const py = dot(r,up);
-  const depth = dot(r,eye);
-  return [W/2 + px*scale, H/2 - py*scale, depth];
-}}
-
-function ellipsePoints(center, radius, z, n=64) {{
-  const out = [];
-  for (let i=0;i<=n;i++) {{
-    const a = 2*Math.PI*i/n;
-    out.push(project([center[0]+radius*Math.cos(a), center[1]+radius*Math.sin(a), z]));
-  }}
-  return out;
-}}
-
-function drawPolygon(points, fill) {{
-  if (!points.length) return;
-  ctx.beginPath();
-  ctx.moveTo(points[0][0],points[0][1]);
-  for (let i=1;i<points.length;i++) ctx.lineTo(points[i][0],points[i][1]);
-  ctx.closePath();
-  ctx.fillStyle = fill;
-  ctx.fill();
-}}
-
-function drawPolyline(points, stroke, width, close=false) {{
-  if (!points.length) return;
-  ctx.beginPath();
-  let started=false;
-  for (let i=0;i<points.length;i++) {{
-    if (points[i] === null) {{
-      if (started) {{
-        ctx.strokeStyle=stroke; ctx.lineWidth=width; ctx.stroke();
-      }}
-      ctx.beginPath(); started=false; continue;
-    }}
-    if (!started) {{ ctx.moveTo(points[i][0],points[i][1]); started=true; }}
-    else ctx.lineTo(points[i][0],points[i][1]);
-  }}
-  if (started) {{
-    if (close) ctx.closePath();
-    ctx.strokeStyle=stroke;
-    ctx.lineWidth=width;
-    ctx.lineCap='round';
-    ctx.lineJoin='round';
-    ctx.stroke();
-  }}
-}}
-
-function drawStaticCylinder(center, radius, height) {{
-  const rings = 7;
-  const levels = [];
-  for (let k=0;k<rings;k++) levels.push(center[2]-height/2 + k*height/(rings-1));
-
-  ctx.globalAlpha = 0.10;
-  for (let k=0;k<rings-1;k++) {{
-    const a = ellipsePoints(center,radius,levels[k]);
-    const b = ellipsePoints(center,radius,levels[k+1]);
-    for (let i=0;i<a.length-1;i++) drawPolygon([a[i],a[i+1],b[i+1],b[i]], '#8A9299');
-  }}
-  ctx.globalAlpha = 1;
-
-  for (const z of levels) drawPolyline(ellipsePoints(center,radius,z), '#9E9E9E', 1.1, true);
-  for (let i=0;i<16;i++) {{
-    const a = 2*Math.PI*i/16;
-    const p0 = project([center[0]+radius*Math.cos(a), center[1]+radius*Math.sin(a), levels[0]]);
-    const p1 = project([center[0]+radius*Math.cos(a), center[1]+radius*Math.sin(a), levels[levels.length-1]]);
-    drawPolyline([p0,p1], '#9E9E9E', 0.9);
-  }}
-}}
-
-function drawLine3D(a,b,color,width) {{ drawPolyline([project(a),project(b)], color, width); }}
-
-function drawRobot(s) {{
-  const lx=s.links.x, ly=s.links.y, lz=s.links.z;
-  for (let i=0;i<lx.length;i+=3) {{
-    if (lx[i] == null || lx[i+1] == null) continue;
-    drawLine3D([lx[i],ly[i],lz[i]],[lx[i+1],ly[i+1],lz[i+1]],'#4682B4',8);
-  }}
-
-  for (let i=0;i<s.joints.x.length;i++) {{
-    const p=project([s.joints.x[i],s.joints.y[i],s.joints.z[i]]);
-    ctx.beginPath(); ctx.arc(p[0],p[1],6,0,2*Math.PI); ctx.fillStyle='#0B2E59'; ctx.fill();
-  }}
-
-  const c=[];
-  for (let i=0;i<s.rectangle.x.length;i++) c.push(project([s.rectangle.x[i],s.rectangle.y[i],s.rectangle.z[i]]));
-  drawPolyline(c,'#00B8D9',4,true);
-
-  const cp=project([s.center.x[0],s.center.y[0],s.center.z[0]]);
-  ctx.beginPath(); ctx.arc(cp[0],cp[1],4,0,2*Math.PI); ctx.fillStyle='#fff'; ctx.fill(); ctx.strokeStyle='#333'; ctx.lineWidth=1; ctx.stroke();
-  drawLine3D([s.normal.x[0],s.normal.y[0],s.normal.z[0]],[s.normal.x[1],s.normal.y[1],s.normal.z[1]],'#AB47BC',3);
-
-  const lxs=s.lasers.x, lys=s.lasers.y, lzs=s.lasers.z;
-  for (let i=0;i<lxs.length;i+=3) {{
-    if (lxs[i] == null || lxs[i+1] == null) continue;
-    drawLine3D([lxs[i],lys[i],lzs[i]],[lxs[i+1],lys[i+1],lzs[i+1]],'#FF6D00',3);
-  }}
-
-  for (let i=0;i<s.impacts.x.length;i++) {{
-    if (s.impacts.x[i] == null) continue;
-    const p=project([s.impacts.x[i],s.impacts.y[i],s.impacts.z[i]]);
-    ctx.beginPath(); ctx.arc(p[0],p[1],4,0,2*Math.PI); ctx.fillStyle='#00C853'; ctx.fill();
-  }}
-
-  for (let i=0;i<s.sensors.x.length;i++) {{
-    const p=project([s.sensors.x[i],s.sensors.y[i],s.sensors.z[i]]);
-    ctx.beginPath(); ctx.arc(p[0],p[1],5,0,2*Math.PI); ctx.fillStyle='#FFB300'; ctx.fill();
-    ctx.font='bold 14px Arial'; ctx.fillStyle='#111'; ctx.fillText(s.sensor_labels[i],p[0]+7,p[1]-7);
-  }}
-}}
-
-function drawAxes() {{
-  const L = half*0.55;
-  drawLine3D([-L,0,sceneCenter[2]],[L,0,sceneCenter[2]],'#D0D0D0',1);
-  drawLine3D([0,-L,sceneCenter[2]],[0,L,sceneCenter[2]],'#D0D0D0',1);
-  drawLine3D([0,0,sceneCenter[2]-L],[0,0,sceneCenter[2]+L],'#D0D0D0',1);
-  drawLine3D([S.tube_x,S.tube_y,S.tube_z-S.tube_length/2],[S.tube_x,S.tube_y,S.tube_z+S.tube_length/2],'#E53935',3);
-}}
-
-function drawFrame(k) {{
-  if (!frames.length) return;
-  current=Math.max(0,Math.min(k,frames.length-1));
-  ctx.clearRect(0,0,W,H);
-  ctx.fillStyle='#fff'; ctx.fillRect(0,0,W,H);
-  drawAxes();
-  drawStaticCylinder([S.tube_x,S.tube_y,S.tube_z],S.tube_radius,S.tube_length);
-  drawStaticCylinder([S.base_x,S.base_y,S.base_z],S.base_radius,S.base_height);
-  drawRobot(frames[current]);
-  progress.textContent = 'Frame ' + (current+1) + ' / ' + frames.length;
-}}
-
-async function startAnimation() {{
-  if (!frames.length || playing) return;
-  const my = ++token;
-  playing=true;
-  if (current >= frames.length-1) current=0;
-  while (playing && my===token) {{
-    drawFrame(current);
-    if (current >= frames.length-1) break;
-    await new Promise(r=>setTimeout(r,{frame_delay_ms}));
-    if (my!==token) break;
-    current++;
-  }}
-  playing=false;
-}}
-
-function stopAnimation() {{ playing=false; token++; drawFrame(current); }}
-document.getElementById('play').onclick=startAnimation;
-document.getElementById('stop').onclick=stopAnimation;
-window.addEventListener('resize', resize);
-resize();
-{autoplay_js}
-</script>
-</body>
-</html>'''
+    progress_placeholder.empty()
+    return total
 
 
 # ============================================================
@@ -1971,9 +1398,6 @@ def load_robot():
 robot = load_robot()
 lasers = FourLasers(robot)
 initialize_state(robot)
-
-if "stop_requested" not in st.session_state:
-    st.session_state.stop_requested = False
 
 st.title("Alinhamento automático — Robô 6 DOF + 4 lasers")
 st.caption(
@@ -2094,6 +1518,16 @@ with st.sidebar:
         key="align_tol_deg",
     )
 
+    st.number_input(
+        "Tempo por quadro da simulação (ms)",
+        min_value=100,
+        max_value=1500,
+        value=500,
+        step=50,
+        key="animation_delay_ms",
+        help="Aumente este valor para deixar a simulação mais lenta.",
+    )
+
     st.subheader("Juntas")
 
     limits = robot.limits()
@@ -2150,25 +1584,13 @@ with st.sidebar:
         type="primary",
     )
 
-    stop_clicked = st.button(
-        "■ PARAR",
-        use_container_width=True,
-    )
-
-    if stop_clicked:
-        st.session_state.stop_requested = True
-        st.session_state.status = "Parada solicitada"
-
 cfg = config_from_widgets()
 
 if align_clicked:
 
-    st.session_state.stop_requested = False
-
     q0 = st.session_state.q.copy()
 
     with st.spinner("Calculando trajetória de alinhamento..."):
-
         states, result = solve_trajectory(
             q0,
             cfg,
@@ -2181,33 +1603,19 @@ if align_clicked:
     st.session_state.trajectory_cfg = cfg
     st.session_state.q = result["final_q"]
 
-    # A trajetória é calculada uma única vez no servidor.
-    # A movimentação é reproduzida pelo navegador de forma fluida.
-    animation_fig, animation_snapshots = make_animated_scene_figure(
+    # --------------------------------------------------------
+    # SIMULAÇÃO
+    # --------------------------------------------------------
+    # Sem Canvas, sem Plotly Frames e sem JavaScript.
+    # O Streamlit atualiza o mesmo placeholder com a cena COMPLETA.
+    frame_count = max(12, min(24, len(states) * 2))
+    rendered_frames = animate_server_side(
         states,
         cfg,
         robot,
         lasers,
-        frame_count=60,
-    )
-
-    # Reproduzimos a simulação em Canvas 2D. Isso elimina a dependência do
-    # WebGL/Plotly durante o movimento e impede que tubo/base desapareçam.
-    components.html(
-        make_canvas_animation_html(
-            animation_snapshots,
-            cfg,
-            robot,
-            height=680,
-            autoplay=True,
-            frame_delay_ms=550,
-        ),
-        height=680,
-        scrolling=False,
-    )
-
-    final_q_deg = np.degrees(
-        result["final_q"]
+        frame_count=frame_count,
+        delay_ms=int(st.session_state["animation_delay_ms"]),
     )
 
     d_final, angle_final, max_dist_error_final = current_metrics(
@@ -2257,7 +1665,6 @@ if align_clicked:
         ["A", "B", "C", "D"],
         d_final,
     ):
-
         with c:
             st.metric(
                 f"Laser {label}",
@@ -2273,8 +1680,6 @@ if align_clicked:
     # ----------------------------
 
     history = result["history"]
-
-    # Usa o histórico calculado diretamente, sem depender de reruns.
     original_history = st.session_state.history
     st.session_state.history = history
 
@@ -2290,8 +1695,9 @@ if align_clicked:
 
     st.info(
         f"Trajetória calculada: {result['iterations']} iterações • "
-        f"{len(animation_snapshots)} frames visuais. "
-        "O cálculo é feito uma única vez no servidor e a animação é reproduzida em Canvas no navegador."
+        f"{rendered_frames} quadros visuais. "
+        "A simulação atualiza a cena completa a cada quadro para manter "
+        "tubo, base, robô e sensores sincronizados."
     )
 
 # ------------------------------------------------------------
