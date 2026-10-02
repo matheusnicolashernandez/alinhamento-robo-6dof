@@ -2056,15 +2056,6 @@ def make_static_camera_html_v32(fig, height=620):
                 ]
             }}
         ).then(function(gd) {{
-            // Na primeira renderização o Streamlit ainda pode estar
-            // terminando de calcular a largura disponível. Força um
-            // resize depois que o gráfico já existe, sem alterar a cena.
-            requestAnimationFrame(function() {{
-                Plotly.Plots.resize(gd);
-                setTimeout(function() {{ Plotly.Plots.resize(gd); }}, 80);
-                setTimeout(function() {{ Plotly.Plots.resize(gd); }}, 250);
-            }});
-
             gd.on("plotly_relayout", function(evt) {{
                 if (!evt) return;
                 const keys = Object.keys(evt);
@@ -2081,22 +2072,35 @@ def make_static_camera_html_v32(fig, height=620):
             }}, {{passive:true}});
 
             saveCamera(gd);
-
-            if (window.ResizeObserver) {{
-                const ro = new ResizeObserver(function() {{
-                    Plotly.Plots.resize(gd);
-                }});
-                ro.observe(container);
-            }}
         }});
     }}
 
+    // O problema da primeira abertura era o gráfico nascer antes de o
+    // elemento HTML ter recebido sua largura real. Em vez de criar o
+    // gráfico e depois tentar consertar com vários resizes, esperamos
+    // o tamanho real e só então fazemos o primeiro Plotly.newPlot().
+    function waitForRealSize(attempt) {{
+        const w = container.clientWidth;
+        const h = container.clientHeight;
+        if (w >= 300 && h >= 300) {{
+            render();
+            return;
+        }}
+        if (attempt < 60) {{
+            requestAnimationFrame(function() {{
+                waitForRealSize(attempt + 1);
+            }});
+        }} else {{
+            render();
+        }}
+    }}
+
     if (window.Plotly) {{
-        render();
+        waitForRealSize(0);
     }} else {{
         const script = document.createElement("script");
         script.src = "https://cdn.plot.ly/plotly-latest.min.js";
-        script.onload = render;
+        script.onload = function() {{ waitForRealSize(0); }};
         document.head.appendChild(script);
     }}
 }})();
