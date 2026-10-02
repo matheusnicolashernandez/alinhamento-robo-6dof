@@ -2198,6 +2198,19 @@ st.caption(
 # SIDEBAR
 # ------------------------------------------------------------
 
+def update_joint_from_widgets():
+    """Atualiza a pose imediatamente quando qualquer junta é alterada."""
+    q_values = [
+        float(st.session_state[f"q_deg_{i}"])
+        for i in range(6)
+    ]
+    st.session_state.q = np.radians(np.asarray(q_values, dtype=float))
+    st.session_state.trajectory = None
+    st.session_state.trajectory_cfg = None
+    st.session_state.last_result = None
+    st.session_state.status = "Pose manual atualizada"
+
+
 with st.sidebar:
 
     st.header("Configuração")
@@ -2311,18 +2324,6 @@ with st.sidebar:
 
     limits = robot.limits()
 
-    def update_joint_from_widgets():
-        """Atualiza a pose somente quando um campo de junta é alterado."""
-        q_deg_live = np.array(
-            [st.session_state[f"q_deg_{j}"] for j in range(len(JOINT_LABELS))],
-            dtype=float,
-        )
-        st.session_state.q = np.radians(q_deg_live)
-        st.session_state.trajectory = None
-        st.session_state.trajectory_cfg = None
-        st.session_state.last_result = None
-        st.session_state.status = "Pose manual em edição"
-
     q_deg = []
 
     for i, label in enumerate(JOINT_LABELS):
@@ -2341,6 +2342,8 @@ with st.sidebar:
 
         q_deg.append(value)
 
+    # As juntas são aplicadas automaticamente pelo callback de cada campo.
+
     if st.button(
         "↺ Resetar pose",
         use_container_width=True,
@@ -2348,6 +2351,8 @@ with st.sidebar:
         st.session_state.q = np.radians(
             INITIAL_Q_DEG.copy()
         )
+        for i in range(6):
+            st.session_state[f"q_deg_{i}"] = float(INITIAL_Q_DEG[i])
         reset_history()
         st.session_state.trajectory = None
         st.session_state.trajectory_cfg = None
