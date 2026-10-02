@@ -2225,6 +2225,39 @@ st.caption(
 
 with st.sidebar:
 
+    # Botão principal no topo da barra lateral.
+    # Mantém o comportamento de botão primário, mas com aparência verde.
+    st.markdown(
+        """
+        <style>
+        div.stButton > button[kind="primary"] {
+            background-color: #2E7D32 !important;
+            border-color: #2E7D32 !important;
+            color: white !important;
+        }
+        div.stButton > button[kind="primary"]:hover {
+            background-color: #1B5E20 !important;
+            border-color: #1B5E20 !important;
+            color: white !important;
+        }
+        div.stButton > button[kind="primary"]:focus:not(:active) {
+            color: white !important;
+            border-color: #2E7D32 !important;
+            box-shadow: 0 0 0 0.1rem rgba(46,125,50,0.25) !important;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    align_clicked = st.button(
+        "▶ ALINHAR AUTOMATICAMENTE",
+        use_container_width=True,
+        type="primary",
+    )
+
+    st.divider()
+
     st.header("Configuração")
 
     st.number_input(
@@ -2400,12 +2433,6 @@ with st.sidebar:
         st.rerun()
 
     st.divider()
-
-    align_clicked = st.button(
-        "▶ ALINHAR AUTOMATICAMENTE",
-        use_container_width=True,
-        type="primary",
-    )
 
     stop_clicked = st.button(
         "■ PARAR",
