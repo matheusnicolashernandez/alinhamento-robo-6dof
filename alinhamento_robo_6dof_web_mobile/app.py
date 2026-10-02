@@ -2100,6 +2100,13 @@ lasers = FourLasers(robot)
 initialize_state(robot)
 
 st.title("Alinhamento automático — Robô 6 DOF + 4 lasers")
+
+st.markdown("""<style>
+div[data-testid="stButton"] button[kind="primary"] { background-color:#16a34a; border-color:#16a34a; color:white; font-weight:700; }
+div[data-testid="stButton"] button[kind="primary"]:hover { background-color:#15803d; border-color:#15803d; color:white; }
+</style>""", unsafe_allow_html=True)
+
+align_clicked = st.button("▶ ALINHAR AUTOMATICAMENTE", use_container_width=True, type="primary")
 st.caption(
     "Versão web para celular/tablet. "
     "O cálculo continua baseado no normal.urdf."
@@ -2252,7 +2259,6 @@ with st.sidebar:
         st.session_state.trajectory_cfg = None
         st.session_state.last_result = None
         st.session_state.status = "Pose manual aplicada"
-        st.rerun()
 
     if st.button(
         "↺ Resetar pose",
@@ -2266,15 +2272,9 @@ with st.sidebar:
         st.session_state.trajectory_cfg = None
         st.session_state.last_result = None
         st.session_state.status = "Pose inicial restaurada"
-        st.rerun()
 
     st.divider()
 
-    align_clicked = st.button(
-        "▶ ALINHAR AUTOMATICAMENTE",
-        use_container_width=True,
-        type="primary",
-    )
 
     stop_clicked = st.button(
         "■ PARAR",
@@ -2419,9 +2419,11 @@ else:
             scene_fig,
             width="stretch",
             config={
-                "scrollZoom": False,
+                "scrollZoom": True,
                 "displaylogo": False,
+                "displayModeBar": True,
             },
+            key="main_robot_scene",
         )
 
         col1, col2, col3, col4 = st.columns(4)
