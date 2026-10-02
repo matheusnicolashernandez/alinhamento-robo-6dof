@@ -1108,6 +1108,9 @@ def initialize_state(robot):
     if "trajectory_cfg" not in st.session_state:
         st.session_state.trajectory_cfg = None
 
+    if "last_result" not in st.session_state:
+        st.session_state.last_result = None
+
 
 def reset_history():
     st.session_state.history = {
@@ -2196,6 +2199,7 @@ with st.sidebar:
         st.session_state.q = manual_q
         st.session_state.trajectory = None
         st.session_state.trajectory_cfg = None
+        st.session_state.last_result = None
         st.session_state.status = "Pose manual aplicada"
         st.rerun()
 
@@ -2209,6 +2213,7 @@ with st.sidebar:
         reset_history()
         st.session_state.trajectory = None
         st.session_state.trajectory_cfg = None
+        st.session_state.last_result = None
         st.session_state.status = "Pose inicial restaurada"
         st.rerun()
 
@@ -2238,10 +2243,8 @@ if align_clicked:
 
     st.session_state.stop_requested = False
 
-    # Se já existe uma trajetória calculada para a mesma configuração,
-    # reutiliza a trajetória original para que clicar novamente em
-    # ALINHAR reproduza a simulação, em vez de começar da pose final
-    # e retornar imediatamente com 0 iterações.
+    # Se já existe uma trajetória para a mesma configuração,
+    # reproduz a partir da pose inicial da trajetória.
     previous_states = st.session_state.get("trajectory")
     previous_cfg = st.session_state.get("trajectory_cfg")
 
@@ -2257,27 +2260,35 @@ if align_clicked:
         q0 = st.session_state.q.copy()
 
     with st.spinner("Calculando trajetória de alinhamento..."):
-
         states, result = solve_trajectory(
-            q0,
-            cfg,
-            robot,
-            lasers,
-            max_iterations=300,
+            q0, cfg, robot, lasers, max_iterations=300
         )
 
     st.session_state.trajectory = states
     st.session_state.trajectory_cfg = cfg
     st.session_state.q = result["final_q"]
+    st.session_state.last_result = result
+    st.session_state.history = result["history"]
 
-    # A trajetória é calculada uma única vez no servidor.
-    # A movimentação é reproduzida pelo navegador de forma fluida.
+# ------------------------------------------------------------
+# ÚLTIMA SIMULAÇÃO — FICA PERSISTENTE APÓS O CLIQUE
+# ------------------------------------------------------------
+
+last_result = st.session_state.get("last_result")
+trajectory = st.session_state.get("trajectory")
+trajectory_cfg = st.session_state.get("trajectory_cfg")
+
+if (
+    last_result is not None
+    and trajectory is not None
+    and trajectory_cfg == cfg
+    and len(trajectory) > 0
+):
+
+    # Recria o componente em cada rerun. Assim o Play e o gráfico
+    # não desaparecem quando o Streamlit atualiza a página.
     animation_fig, animation_snapshots = make_animated_scene_figure(
-        states,
-        cfg,
-        robot,
-        lasers,
-        frame_count=60,
+        trajectory, cfg, robot, lasers, frame_count=60
     )
 
     components.html(
@@ -2292,87 +2303,40 @@ if align_clicked:
         scrolling=False,
     )
 
-    final_q_deg = np.degrees(
-        result["final_q"]
-    )
-
+    final_q = np.asarray(last_result["final_q"], dtype=float)
     d_final, angle_final, max_dist_error_final = current_metrics(
-        robot,
-        lasers,
-        result["final_q"],
-        cfg,
+        robot, lasers, final_q, cfg
     )
 
-    # ----------------------------
-    # RESULTADO
-    # ----------------------------
-
-    if result["aligned"]:
-
+    if last_result["aligned"]:
         st.success(
-            f"✓ ALINHADO em {result['iterations']} iterações • "
-            f"erro de distância máx.: "
-            f"{max_dist_error_final:.3f} mm • "
+            f"✓ ALINHADO em {last_result['iterations']} iterações • "
+            f"erro de distância máx.: {max_dist_error_final:.3f} mm • "
             f"erro angular: {angle_final:.4f}°"
         )
-
-        st.session_state.status = "✓ ALINHADO"
-
     else:
-
-        message = result["reason"] or "Trajetória encerrada."
-
+        message = last_result["reason"] or "Trajetória encerrada."
         st.warning(
-            message
-            + " "
-            + f"Erro de distância máx.: "
-            + f"{max_dist_error_final:.3f} mm • "
+            message + " "
+            + f"Erro de distância máx.: {max_dist_error_final:.3f} mm • "
             + f"erro angular: {angle_final:.4f}°"
         )
 
-        st.session_state.status = message
-
-    # ----------------------------
-    # LEITURAS FINAIS
-    # ----------------------------
-
     c1, c2, c3, c4 = st.columns(4)
-
     for c, label, value in zip(
-        [c1, c2, c3, c4],
-        ["A", "B", "C", "D"],
-        d_final,
+        [c1, c2, c3, c4], ["A", "B", "C", "D"], d_final
     ):
-
         with c:
             st.metric(
                 f"Laser {label}",
-                (
-                    f"{value:.2f} mm"
-                    if np.isfinite(value)
-                    else "—"
-                ),
+                f"{value:.2f} mm" if np.isfinite(value) else "—",
             )
-
-    # ----------------------------
-    # GRÁFICO DA TRAJETÓRIA
-    # ----------------------------
-
-    history = result["history"]
-
-    # Usa o histórico calculado diretamente, sem depender de reruns.
-    original_history = st.session_state.history
-    st.session_state.history = history
 
     st.plotly_chart(
         graph_figure(cfg),
         width="stretch",
-        config={
-            "displaylogo": False,
-        },
+        config={"displaylogo": False},
     )
-
-    st.session_state.history = original_history
 
     st.caption(
         "A animação é reproduzida no navegador. "
@@ -2380,71 +2344,69 @@ if align_clicked:
         "são atualizados durante o movimento."
     )
 
-# ------------------------------------------------------------
-# VISUALIZAÇÃO NORMAL
-# ------------------------------------------------------------
-
 else:
 
-    q = st.session_state.q
 
-    d, angle, max_dist_error = current_metrics(
-        robot,
-        lasers,
-        q,
-        cfg,
-    )
 
-    scene_fig, _ = make_scene_figure(
-        q,
-        cfg,
-        robot,
-        lasers,
-    )
+        q = st.session_state.q
 
-    st.plotly_chart(
-        scene_fig,
-        width="stretch",
-        config={
-            "scrollZoom": False,
-            "displaylogo": False,
-        },
-    )
-
-    col1, col2, col3, col4 = st.columns(4)
-
-    labels = ["A", "B", "C", "D"]
-
-    for i, label in enumerate(labels):
-
-        value = (
-            f"{d[i]:.2f} mm"
-            if np.isfinite(d[i])
-            else "—"
+        d, angle, max_dist_error = current_metrics(
+            robot,
+            lasers,
+            q,
+            cfg,
         )
 
-        with [col1, col2, col3, col4][i]:
-            st.metric(
-                f"Laser {label}",
-                value,
+        scene_fig, _ = make_scene_figure(
+            q,
+            cfg,
+            robot,
+            lasers,
+        )
+
+        st.plotly_chart(
+            scene_fig,
+            width="stretch",
+            config={
+                "scrollZoom": False,
+                "displaylogo": False,
+            },
+        )
+
+        col1, col2, col3, col4 = st.columns(4)
+
+        labels = ["A", "B", "C", "D"]
+
+        for i, label in enumerate(labels):
+
+            value = (
+                f"{d[i]:.2f} mm"
+                if np.isfinite(d[i])
+                else "—"
             )
 
-    st.write(
-        f"**Status:** {st.session_state.status}  \n"
-        f"**Erro angular:** {angle:.4f}°  \n"
-        f"**Erro máximo de distância:** "
-        f"{max_dist_error:.3f} mm"
-    )
+            with [col1, col2, col3, col4][i]:
+                st.metric(
+                    f"Laser {label}",
+                    value,
+                )
 
-    st.plotly_chart(
-        graph_figure(cfg),
-        width="stretch",
-        config={
-            "displaylogo": False,
-        },
-    )
+        st.write(
+            f"**Status:** {st.session_state.status}  \n"
+            f"**Erro angular:** {angle:.4f}°  \n"
+            f"**Erro máximo de distância:** "
+            f"{max_dist_error:.3f} mm"
+        )
 
-    st.caption(
-        "O retângulo está acoplado diretamente à J6; "
-        "o Z do end-effector é a normal/perpendicular dos lasers."
-    )
+        st.plotly_chart(
+            graph_figure(cfg),
+            width="stretch",
+            config={
+                "displaylogo": False,
+            },
+        )
+
+        st.caption(
+            "O retângulo está acoplado diretamente à J6; "
+            "o Z do end-effector é a normal/perpendicular dos lasers."
+        )
