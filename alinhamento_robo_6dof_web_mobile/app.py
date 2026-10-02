@@ -2198,19 +2198,6 @@ st.caption(
 # SIDEBAR
 # ------------------------------------------------------------
 
-def update_joint_from_widgets():
-    """Atualiza a pose imediatamente quando qualquer junta é alterada."""
-    q_values = [
-        float(st.session_state[f"q_deg_{i}"])
-        for i in range(6)
-    ]
-    st.session_state.q = np.radians(np.asarray(q_values, dtype=float))
-    st.session_state.trajectory = None
-    st.session_state.trajectory_cfg = None
-    st.session_state.last_result = None
-    st.session_state.status = "Pose manual atualizada"
-
-
 with st.sidebar:
 
     st.header("Configuração")
@@ -2337,12 +2324,36 @@ with st.sidebar:
             ),
             step=1.0,
             key=f"q_deg_{i}",
-            on_change=update_joint_from_widgets,
         )
 
         q_deg.append(value)
 
-    # As juntas são aplicadas automaticamente pelo callback de cada campo.
+    manual_q = np.radians(
+        np.asarray(q_deg, dtype=float)
+    )
+
+    # Atualiza a pose somente quando os valores dos widgets realmente mudam.
+    # Não usamos callback: alterar um number_input já faz o Streamlit executar
+    # novamente o script, e a pose é então atualizada aqui antes da cena 3D.
+    previous_manual_q = st.session_state.get("manual_q_snapshot")
+    joints_changed = (
+        previous_manual_q is not None
+        and not np.allclose(
+            manual_q,
+            np.asarray(previous_manual_q, dtype=float),
+            rtol=0.0,
+            atol=1e-12,
+        )
+    )
+
+    if joints_changed:
+        st.session_state.q = manual_q.copy()
+        st.session_state.trajectory = None
+        st.session_state.trajectory_cfg = None
+        st.session_state.last_result = None
+        st.session_state.status = "Pose manual atualizada"
+
+    st.session_state.manual_q_snapshot = manual_q.copy()
 
     if st.button(
         "↺ Resetar pose",
@@ -2353,6 +2364,9 @@ with st.sidebar:
         )
         for i in range(6):
             st.session_state[f"q_deg_{i}"] = float(INITIAL_Q_DEG[i])
+        st.session_state.manual_q_snapshot = np.radians(
+            INITIAL_Q_DEG.copy()
+        )
         reset_history()
         st.session_state.trajectory = None
         st.session_state.trajectory_cfg = None
@@ -2400,7 +2414,7 @@ if align_clicked:
     if can_replay:
         q0 = np.asarray(previous_states[0], dtype=float).copy()
     else:
-        q0 = st.session_state.q.copy()
+        q0 = manual_q.copy()
 
     with st.spinner("Calculando trajetória de alinhamento..."):
         states, result = solve_trajectory(
@@ -2491,7 +2505,8 @@ else:
 
 
 
-        q = st.session_state.q
+        # A cena normal usa diretamente os valores atuais dos campos q1...q6.
+        q = manual_q
 
         d, angle, max_dist_error = current_metrics(
             robot,
