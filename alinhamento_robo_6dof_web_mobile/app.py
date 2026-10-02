@@ -2419,14 +2419,13 @@ else:
         # Assim não há renderização intermediária na câmera padrão.
         fig_json = scene_fig.to_json()
         camera_key = "robot_scene_camera_v29"
-        plotly_js = pio.get_plotlyjs()
         scene_html = f"""
 <!DOCTYPE html>
 <html>
 <head>
 <meta charset="utf-8">
 <style>html, body {{ margin:0; padding:0; width:100%; height:100%; overflow:hidden; }}</style>
-<script>{plotly_js}</script>
+<script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
 </head>
 <body>
 <div id="main_robot_scene" style="width:100%;height:650px;"></div>
