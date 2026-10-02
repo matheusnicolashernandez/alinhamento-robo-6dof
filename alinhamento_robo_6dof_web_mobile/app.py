@@ -15,7 +15,7 @@ import streamlit.components.v1 as components
 
 st.set_page_config(
     page_title="Alinhamento Robô 6 DOF",
-    page_icon="🤖",
+    page_icon=None,
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -1588,156 +1588,267 @@ def make_animated_scene_figure(states, cfg, robot, lasers, frame_count=80):
     return fig, frames
 
 
-def make_animated_html(fig, frames, height=650, autoplay=True):
-    """HTML robusto para reproduzir a animação no navegador.
+def make_canvas_animation_html(snapshots, cfg, robot, height=680, autoplay=True, frame_delay_ms=550):
+    """Animação 3D desenhada em Canvas 2D, sem WebGL/Plotly.
 
-    Importante: os Frames NÃO são embutidos no JSON inicial do ``fig``.
-    Eles são registrados uma única vez com ``Plotly.addFrames``. Na V3,
-    ``fig.frames`` e ``addFrames`` eram usados ao mesmo tempo, o que podia
-    deixar os frames duplicados e impedir o Play de ser inicializado.
+    Esta é uma escolha deliberada para a reprodução no celular. A cena inteira
+    é redesenhada a cada frame: tubo, base e robô não dependem de traces WebGL
+    persistentes. Assim nenhum objeto pode desaparecer durante o Play.
+    A projeção é ortográfica e usa a mesma escala para X/Y/Z.
     """
-
     import json
 
-    fig_json = fig.to_plotly_json()
-    # Os frames serão adicionados explicitamente abaixo. Evita duplicação.
-    fig_json.pop("frames", None)
+    if not snapshots:
+        return ""
 
-    fig_json = json.dumps(fig_json, separators=(",", ":"))
-    frames_json = json.dumps(
-        [f.to_plotly_json() for f in frames],
-        separators=(",", ":"),
-    )
+    lo, hi = scene_bounds(cfg, robot)
+    scene_center = ((lo + hi) / 2.0).astype(float)
+    half = float(np.max(hi - lo)) / 2.0 * 1.08
 
-    autoplay_js = """
-        setTimeout(function () { startAnimation(); }, 700);
-    """ if autoplay else ""
+    static_cfg = {
+        "tube_x": float(cfg["tube_x"]),
+        "tube_y": float(cfg["tube_y"]),
+        "tube_z": float(cfg["tube_z"]),
+        "tube_radius": float(cfg["tube_diameter"] / 2.0),
+        "tube_length": float(cfg["tube_length"]),
+        "base_x": float(cfg["base_x"]),
+        "base_y": float(cfg["base_y"]),
+        "base_z": float(cfg["base_z"]),
+        "base_radius": 120.0,
+        "base_height": 180.0,
+    }
 
-    html = f"""
-<!DOCTYPE html>
+    payload = {
+        "frames": snapshots,
+        "static": static_cfg,
+        "scene_center": scene_center.tolist(),
+        "half": half,
+    }
+
+    data_json = json.dumps(payload, separators=(",", ":"), allow_nan=True)
+    autoplay_js = "setTimeout(startAnimation, 500);" if autoplay else ""
+
+    return f'''<!DOCTYPE html>
 <html>
 <head>
 <meta charset="utf-8">
-<script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <style>
-html, body {{ margin:0; padding:0; background:white; width:100%; height:100%; overflow:hidden; }}
-#wrap {{ position:relative; width:100%; height:100%; }}
-#plot {{ width:100%; height:100%; }}
-.controls {{ position:absolute; top:8px; left:8px; z-index:20; display:flex; gap:6px; }}
-button {{ border:1px solid #bbb; background:white; border-radius:6px; padding:7px 11px; font-size:16px; box-shadow:0 1px 3px rgba(0,0,0,.15); }}
-button:active {{ transform:scale(.98); }}
+html,body {{ margin:0; padding:0; background:#fff; width:100%; height:100%; overflow:hidden; font-family:Arial,sans-serif; }}
+#wrap {{ position:relative; width:100%; height:100%; background:#fff; }}
+#canvas {{ width:100%; height:100%; display:block; touch-action:none; }}
+#controls {{ position:absolute; top:10px; left:10px; z-index:10; display:flex; gap:7px; }}
+button {{ border:1px solid #aaa; background:#fff; color:#222; border-radius:7px; padding:8px 13px; font-size:15px; box-shadow:0 1px 4px rgba(0,0,0,.12); }}
+#progress {{ position:absolute; left:12px; bottom:10px; z-index:10; background:rgba(255,255,255,.86); padding:5px 8px; border-radius:6px; font-size:13px; color:#444; }}
 </style>
 </head>
 <body>
 <div id="wrap">
-  <div id="plot"></div>
-  <div class="controls">
-    <button id="play">▶ Play</button>
-    <button id="stop">■ Parar</button>
-  </div>
+<canvas id="canvas"></canvas>
+<div id="controls">
+  <button id="play">▶ Play</button>
+  <button id="stop">■ Parar</button>
+</div>
+<div id="progress"></div>
 </div>
 <script>
-const fig = {fig_json};
-const frames = {frames_json};
-const gd = document.getElementById('plot');
+const DATA = {data_json};
+const frames = DATA.frames || [];
+const S = DATA.static;
+const sceneCenter = DATA.scene_center;
+const half = DATA.half;
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+const progress = document.getElementById('progress');
 let playing = false;
-let currentIndex = 0;
-let playToken = 0;
+let token = 0;
+let current = 0;
+let W = 1, H = 1, scale = 1;
 
-// Simulação deliberadamente mais lenta.
-const FRAME_DELAY_MS = 450;
-const FRAME_ANIMATION_MS = 120;
+// Câmera ortográfica fixa. Unidades iguais nos 3 eixos.
+const eye = normalize([1.10, 1.10, 3.60]);
+const worldUp = [0,0,1];
+const right = normalize(cross(eye, worldUp));
+const up = normalize(cross(right, eye));
 
-function sleep(ms) {{
-    return new Promise(resolve => setTimeout(resolve, ms));
+function normalize(a) {{
+  const n = Math.hypot(a[0],a[1],a[2]) || 1;
+  return [a[0]/n,a[1]/n,a[2]/n];
+}}
+function cross(a,b) {{ return [a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]]; }}
+function dot(a,b) {{ return a[0]*b[0]+a[1]*b[1]+a[2]*b[2]; }}
+function sub(a,b) {{ return [a[0]-b[0],a[1]-b[1],a[2]-b[2]]; }}
+
+function resize() {{
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const rect = canvas.getBoundingClientRect();
+  W = Math.max(1, rect.width);
+  H = Math.max(1, rect.height);
+  canvas.width = Math.round(W*dpr);
+  canvas.height = Math.round(H*dpr);
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+  scale = Math.min((W-50)/(2*half), (H-60)/(2*half));
+  drawFrame(current);
 }}
 
-async function showFrame(k) {{
-    if (!frames.length) return;
-
-    const name = frames[k].name;
-
-    await Plotly.animate(
-        gd,
-        [name],
-        {{
-            mode: 'immediate',
-            transition: {{duration: 0}},
-            frame: {{duration: FRAME_ANIMATION_MS, redraw: false}},
-        }}
-    );
+function project(p) {{
+  const r = sub(p, sceneCenter);
+  const px = dot(r,right);
+  const py = dot(r,up);
+  const depth = dot(r,eye);
+  return [W/2 + px*scale, H/2 - py*scale, depth];
 }}
 
-function stopAnimation() {{
-    playing = false;
-    playToken += 1;
+function ellipsePoints(center, radius, z, n=64) {{
+  const out = [];
+  for (let i=0;i<=n;i++) {{
+    const a = 2*Math.PI*i/n;
+    out.push(project([center[0]+radius*Math.cos(a), center[1]+radius*Math.sin(a), z]));
+  }}
+  return out;
+}}
+
+function drawPolygon(points, fill) {{
+  if (!points.length) return;
+  ctx.beginPath();
+  ctx.moveTo(points[0][0],points[0][1]);
+  for (let i=1;i<points.length;i++) ctx.lineTo(points[i][0],points[i][1]);
+  ctx.closePath();
+  ctx.fillStyle = fill;
+  ctx.fill();
+}}
+
+function drawPolyline(points, stroke, width, close=false) {{
+  if (!points.length) return;
+  ctx.beginPath();
+  let started=false;
+  for (let i=0;i<points.length;i++) {{
+    if (points[i] === null) {{
+      if (started) {{
+        ctx.strokeStyle=stroke; ctx.lineWidth=width; ctx.stroke();
+      }}
+      ctx.beginPath(); started=false; continue;
+    }}
+    if (!started) {{ ctx.moveTo(points[i][0],points[i][1]); started=true; }}
+    else ctx.lineTo(points[i][0],points[i][1]);
+  }}
+  if (started) {{
+    if (close) ctx.closePath();
+    ctx.strokeStyle=stroke;
+    ctx.lineWidth=width;
+    ctx.lineCap='round';
+    ctx.lineJoin='round';
+    ctx.stroke();
+  }}
+}}
+
+function drawStaticCylinder(center, radius, height) {{
+  const rings = 7;
+  const levels = [];
+  for (let k=0;k<rings;k++) levels.push(center[2]-height/2 + k*height/(rings-1));
+
+  ctx.globalAlpha = 0.10;
+  for (let k=0;k<rings-1;k++) {{
+    const a = ellipsePoints(center,radius,levels[k]);
+    const b = ellipsePoints(center,radius,levels[k+1]);
+    for (let i=0;i<a.length-1;i++) drawPolygon([a[i],a[i+1],b[i+1],b[i]], '#8A9299');
+  }}
+  ctx.globalAlpha = 1;
+
+  for (const z of levels) drawPolyline(ellipsePoints(center,radius,z), '#9E9E9E', 1.1, true);
+  for (let i=0;i<16;i++) {{
+    const a = 2*Math.PI*i/16;
+    const p0 = project([center[0]+radius*Math.cos(a), center[1]+radius*Math.sin(a), levels[0]]);
+    const p1 = project([center[0]+radius*Math.cos(a), center[1]+radius*Math.sin(a), levels[levels.length-1]]);
+    drawPolyline([p0,p1], '#9E9E9E', 0.9);
+  }}
+}}
+
+function drawLine3D(a,b,color,width) {{ drawPolyline([project(a),project(b)], color, width); }}
+
+function drawRobot(s) {{
+  const lx=s.links.x, ly=s.links.y, lz=s.links.z;
+  for (let i=0;i<lx.length;i+=3) {{
+    if (lx[i] == null || lx[i+1] == null) continue;
+    drawLine3D([lx[i],ly[i],lz[i]],[lx[i+1],ly[i+1],lz[i+1]],'#4682B4',8);
+  }}
+
+  for (let i=0;i<s.joints.x.length;i++) {{
+    const p=project([s.joints.x[i],s.joints.y[i],s.joints.z[i]]);
+    ctx.beginPath(); ctx.arc(p[0],p[1],6,0,2*Math.PI); ctx.fillStyle='#0B2E59'; ctx.fill();
+  }}
+
+  const c=[];
+  for (let i=0;i<s.rectangle.x.length;i++) c.push(project([s.rectangle.x[i],s.rectangle.y[i],s.rectangle.z[i]]));
+  drawPolyline(c,'#00B8D9',4,true);
+
+  const cp=project([s.center.x[0],s.center.y[0],s.center.z[0]]);
+  ctx.beginPath(); ctx.arc(cp[0],cp[1],4,0,2*Math.PI); ctx.fillStyle='#fff'; ctx.fill(); ctx.strokeStyle='#333'; ctx.lineWidth=1; ctx.stroke();
+  drawLine3D([s.normal.x[0],s.normal.y[0],s.normal.z[0]],[s.normal.x[1],s.normal.y[1],s.normal.z[1]],'#AB47BC',3);
+
+  const lxs=s.lasers.x, lys=s.lasers.y, lzs=s.lasers.z;
+  for (let i=0;i<lxs.length;i+=3) {{
+    if (lxs[i] == null || lxs[i+1] == null) continue;
+    drawLine3D([lxs[i],lys[i],lzs[i]],[lxs[i+1],lys[i+1],lzs[i+1]],'#FF6D00',3);
+  }}
+
+  for (let i=0;i<s.impacts.x.length;i++) {{
+    if (s.impacts.x[i] == null) continue;
+    const p=project([s.impacts.x[i],s.impacts.y[i],s.impacts.z[i]]);
+    ctx.beginPath(); ctx.arc(p[0],p[1],4,0,2*Math.PI); ctx.fillStyle='#00C853'; ctx.fill();
+  }}
+
+  for (let i=0;i<s.sensors.x.length;i++) {{
+    const p=project([s.sensors.x[i],s.sensors.y[i],s.sensors.z[i]]);
+    ctx.beginPath(); ctx.arc(p[0],p[1],5,0,2*Math.PI); ctx.fillStyle='#FFB300'; ctx.fill();
+    ctx.font='bold 14px Arial'; ctx.fillStyle='#111'; ctx.fillText(s.sensor_labels[i],p[0]+7,p[1]-7);
+  }}
+}}
+
+function drawAxes() {{
+  const L = half*0.55;
+  drawLine3D([-L,0,sceneCenter[2]],[L,0,sceneCenter[2]],'#D0D0D0',1);
+  drawLine3D([0,-L,sceneCenter[2]],[0,L,sceneCenter[2]],'#D0D0D0',1);
+  drawLine3D([0,0,sceneCenter[2]-L],[0,0,sceneCenter[2]+L],'#D0D0D0',1);
+  drawLine3D([S.tube_x,S.tube_y,S.tube_z-S.tube_length/2],[S.tube_x,S.tube_y,S.tube_z+S.tube_length/2],'#E53935',3);
+}}
+
+function drawFrame(k) {{
+  if (!frames.length) return;
+  current=Math.max(0,Math.min(k,frames.length-1));
+  ctx.clearRect(0,0,W,H);
+  ctx.fillStyle='#fff'; ctx.fillRect(0,0,W,H);
+  drawAxes();
+  drawStaticCylinder([S.tube_x,S.tube_y,S.tube_z],S.tube_radius,S.tube_length);
+  drawStaticCylinder([S.base_x,S.base_y,S.base_z],S.base_radius,S.base_height);
+  drawRobot(frames[current]);
+  progress.textContent = 'Frame ' + (current+1) + ' / ' + frames.length;
 }}
 
 async function startAnimation() {{
-    if (!frames.length) return;
-
-    const token = ++playToken;
-    playing = true;
-
-    try {{
-        for (let k = currentIndex; k < frames.length; k++) {{
-            if (!playing || token !== playToken) return;
-
-            currentIndex = k;
-            await showFrame(k);
-
-            if (!playing || token !== playToken) return;
-            await sleep(FRAME_DELAY_MS);
-        }}
-
-        // Terminou: fica no último frame.
-        currentIndex = frames.length - 1;
-    }} catch (err) {{
-        console.error('Erro na animação:', err);
-    }} finally {{
-        if (token === playToken) playing = false;
-    }}
+  if (!frames.length || playing) return;
+  const my = ++token;
+  playing=true;
+  if (current >= frames.length-1) current=0;
+  while (playing && my===token) {{
+    drawFrame(current);
+    if (current >= frames.length-1) break;
+    await new Promise(r=>setTimeout(r,{frame_delay_ms}));
+    if (my!==token) break;
+    current++;
+  }}
+  playing=false;
 }}
 
-async function init() {{
-    try {{
-        await Plotly.newPlot(
-            gd,
-            fig.data,
-            fig.layout,
-            {{
-                responsive:true,
-                displaylogo:false,
-                scrollZoom:false,
-                displayModeBar:false,
-            }}
-        );
-
-        // Registra os frames UMA ÚNICA VEZ.
-        await Plotly.addFrames(gd, frames);
-
-        document.getElementById('play').onclick = function () {{
-            if (currentIndex >= frames.length - 1) currentIndex = 0;
-            startAnimation();
-        }};
-
-        document.getElementById('stop').onclick = function () {{
-            stopAnimation();
-        }};
-
-        {autoplay_js}
-    }} catch (err) {{
-        console.error('Erro ao inicializar a cena:', err);
-    }}
-}}
-
-init();
+function stopAnimation() {{ playing=false; token++; drawFrame(current); }}
+document.getElementById('play').onclick=startAnimation;
+document.getElementById('stop').onclick=stopAnimation;
+window.addEventListener('resize', resize);
+resize();
+{autoplay_js}
 </script>
 </body>
-</html>
-"""
-
-    return html
+</html>'''
 
 
 # ============================================================
@@ -1843,7 +1954,7 @@ initialize_state(robot)
 if "stop_requested" not in st.session_state:
     st.session_state.stop_requested = False
 
-st.title("🤖 Alinhamento automático — Robô 6 DOF + 4 lasers")
+st.title("Alinhamento automático — Robô 6 DOF + 4 lasers")
 st.caption(
     "Versão web para celular/tablet. "
     "O cálculo continua baseado no normal.urdf."
@@ -2059,14 +2170,18 @@ if align_clicked:
         frame_count=60,
     )
 
+    # Reproduzimos a simulação em Canvas 2D. Isso elimina a dependência do
+    # WebGL/Plotly durante o movimento e impede que tubo/base desapareçam.
     components.html(
-        make_animated_html(
-            animation_fig,
+        make_canvas_animation_html(
             animation_snapshots,
-            height=650,
+            cfg,
+            robot,
+            height=680,
             autoplay=True,
+            frame_delay_ms=550,
         ),
-        height=650,
+        height=680,
         scrolling=False,
     )
 
@@ -2155,7 +2270,7 @@ if align_clicked:
     st.info(
         f"Trajetória calculada: {result['iterations']} iterações • "
         f"{len(animation_snapshots)} frames visuais. "
-        "O cálculo é feito uma única vez no servidor e a animação roda no navegador."
+        "O cálculo é feito uma única vez no servidor e a animação é reproduzida em Canvas no navegador."
     )
 
 # ------------------------------------------------------------
