@@ -1056,9 +1056,10 @@ def make_scene_figure(q, cfg, robot, lasers):
                 showgrid=True,
                 zeroline=False,
             ),
-            aspectmode="cube",
+            aspectmode="data",
             dragmode="orbit",
             camera=dict(
+                projection=dict(type="orthographic"),
                 eye=dict(
                     x=1.55,
                     y=1.55,
@@ -1619,11 +1620,11 @@ def make_animated_scene_figure(
             center=(cfg["tube_x"], cfg["tube_y"], cfg["tube_z"]),
             radius=cfg["tube_diameter"] / 2.0,
             height=cfg["tube_length"],
-            color="#111111",
-            width=2,
-            n_theta=72,
-            n_z=27,
-            n_vertical=18,
+            color="rgba(0,0,0,0.55)",
+            width=1,
+            n_theta=24,
+            n_z=8,
+            n_vertical=8,
             name="Tubo",
         )
     )
@@ -1732,9 +1733,10 @@ def make_animated_scene_figure(
                 showgrid=True,
                 zeroline=False,
             ),
-            aspectmode="cube",
+            aspectmode="data",
             dragmode="orbit",
             camera=dict(
+                projection=dict(type="orthographic"),
                 eye=dict(
                     x=1.55,
                     y=1.55,
