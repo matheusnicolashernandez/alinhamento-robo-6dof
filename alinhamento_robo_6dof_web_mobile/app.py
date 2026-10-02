@@ -2056,6 +2056,15 @@ def make_static_camera_html_v32(fig, height=620):
                 ]
             }}
         ).then(function(gd) {{
+            // Na primeira renderização o Streamlit ainda pode estar
+            // terminando de calcular a largura disponível. Força um
+            // resize depois que o gráfico já existe, sem alterar a cena.
+            requestAnimationFrame(function() {{
+                Plotly.Plots.resize(gd);
+                setTimeout(function() {{ Plotly.Plots.resize(gd); }}, 80);
+                setTimeout(function() {{ Plotly.Plots.resize(gd); }}, 250);
+            }});
+
             gd.on("plotly_relayout", function(evt) {{
                 if (!evt) return;
                 const keys = Object.keys(evt);
@@ -2072,6 +2081,13 @@ def make_static_camera_html_v32(fig, height=620):
             }}, {{passive:true}});
 
             saveCamera(gd);
+
+            if (window.ResizeObserver) {{
+                const ro = new ResizeObserver(function() {{
+                    Plotly.Plots.resize(gd);
+                }});
+                ro.observe(container);
+            }}
         }});
     }}
 
