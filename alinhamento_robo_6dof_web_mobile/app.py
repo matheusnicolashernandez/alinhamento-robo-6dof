@@ -35,7 +35,8 @@ DEFAULTS = {
     "tube_x": 0.0,
     "tube_y": 0.0,
     "tube_z": -500.0,
-    "base_x": 0.0,
+    # Pequeno deslocamento inicial solicitado para forçar a atualização visual.
+    "base_x": 1.0,
     "base_y": -500.0,
     "base_z": -2054.0,
     "target_distance": 120.0,
