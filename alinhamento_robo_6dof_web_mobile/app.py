@@ -1859,16 +1859,23 @@ function sleep(ms) {{
 }}
 
 let userCamera = null;
+let userIsInteracting = false;
+
+function copyCamera() {{
+    if (gd.layout && gd.layout.scene && gd.layout.scene.camera) {{
+        return JSON.parse(JSON.stringify(gd.layout.scene.camera));
+    }}
+    return null;
+}}
 
 async function applySnapshot(snapshot) {{
     const x = snapshot.map(item => item.x);
     const y = snapshot.map(item => item.y);
     const z = snapshot.map(item => item.z);
 
-    // Atualiza somente os traces móveis.
-    // NÃO fazemos Plotly.relayout() aqui: ele estava sobrescrevendo
-    // a câmera enquanto o usuário tentava rotacionar/usar zoom.
-    // O uirevision fixo do layout mantém a câmera durante o restyle.
+    // Guarda a câmera antes de atualizar os traces.
+    const cameraBefore = copyCamera();
+
     await Plotly.restyle(
         gd,
         {{
@@ -1878,6 +1885,13 @@ async function applySnapshot(snapshot) {{
         }},
         DYNAMIC_INDICES
     );
+
+    // Só reaplica automaticamente quando o usuário NÃO está fazendo
+    // um gesto. Durante o gesto, o controle da câmera fica livre.
+    if (!userIsInteracting && cameraBefore) {{
+        userCamera = cameraBefore;
+        await Plotly.relayout(gd, {{"scene.camera": cameraBefore}});
+    }}
 }}
 
 async function startAnimation() {{
@@ -1947,24 +1961,34 @@ Plotly.newPlot(
         ]
     }}
 ).then(function () {{
-    // Só registramos o listener DEPOIS que Plotly inicializou o gráfico.
-    // Fazer gd.on(...) antes do newPlot deixa o gráfico em branco em alguns
-    // navegadores.
+    // Detecta o gesto diretamente no elemento do gráfico.
+    // Isso impede que a atualização dos traces roube o controle da câmera.
+    gd.addEventListener('mousedown', function() {{
+        userIsInteracting = true;
+    }});
+    gd.addEventListener('touchstart', function() {{
+        userIsInteracting = true;
+    }}, {{passive: true}});
+
+    window.addEventListener('mouseup', function() {{
+        userIsInteracting = false;
+        userCamera = copyCamera();
+    }});
+    window.addEventListener('touchend', function() {{
+        userIsInteracting = false;
+        userCamera = copyCamera();
+    }}, {{passive: true}});
+
     gd.on('plotly_relayout', function(evt) {{
-        // Plotly pode emitir a câmera como 'scene.camera' ou como
-        // propriedades individuais ('scene.camera.eye.x', etc.).
-        // Em ambos os casos, lemos a câmera completa já atualizada.
         if (evt) {{
             const keys = Object.keys(evt);
             if (keys.some(k => k === 'scene.camera' || k.startsWith('scene.camera.'))) {{
-                userCamera = JSON.parse(JSON.stringify(gd.layout.scene.camera));
+                userCamera = copyCamera();
             }}
         }}
     }});
 
-    userCamera = gd.layout.scene && gd.layout.scene.camera
-        ? JSON.parse(JSON.stringify(gd.layout.scene.camera))
-        : null;
+    userCamera = copyCamera();
 
     {autoplay_js}
 }});
