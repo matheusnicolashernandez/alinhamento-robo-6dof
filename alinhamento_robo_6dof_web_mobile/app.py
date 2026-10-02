@@ -36,7 +36,7 @@ DEFAULTS = {
     "tube_y": 0.0,
     "tube_z": -500.0,
     # Pequeno deslocamento inicial solicitado para forçar a atualização visual.
-    "base_x": 1.0,
+    "base_x": 0.0,
     "base_y": -500.0,
     "base_z": -2054.0,
     "target_distance": 120.0,
@@ -2073,6 +2073,30 @@ def make_static_camera_html_v32(fig, height=620):
             }}, {{passive:true}});
 
             saveCamera(gd);
+
+            // Pequeno "nudge" inicial para forçar o Plotly/WebGL a
+            // concluir a renderização da cena depois que ela já carregou.
+            // A base anda 1 mm em X e volta para a posição original.
+            setTimeout(function() {{
+                try {{
+                    const baseTrace = FIG.data[2];
+                    if (!baseTrace || !baseTrace.x) return;
+
+                    const originalX = JSON.parse(JSON.stringify(baseTrace.x));
+                    const nudgedX = originalX.map(function(row) {{
+                        if (Array.isArray(row)) {{
+                            return row.map(function(v) {{
+                                return typeof v === "number" ? v + 1.0 : v;
+                            }});
+                        }}
+                        return typeof row === "number" ? row + 1.0 : row;
+                    }});
+
+                    Plotly.restyle(gd, {{x: [nudgedX]}}, [2]).then(function() {{
+                        return Plotly.restyle(gd, {{x: [originalX]}}, [2]);
+                    }});
+                }} catch (e) {{}}
+            }}, 150);
         }});
     }}
 
