@@ -1860,14 +1860,6 @@ function sleep(ms) {{
 
 let userCamera = null;
 
-// Guarda a câmera que o usuário estiver usando. Assim a animação nunca
-// força a cena de volta para a câmera inicial.
-gd.on('plotly_relayout', function(evt) {{
-    if (evt && evt['scene.camera']) {{
-        userCamera = evt['scene.camera'];
-    }}
-}});
-
 async function applySnapshot(snapshot) {{
     const x = snapshot.map(item => item.x);
     const y = snapshot.map(item => item.y);
@@ -1964,6 +1956,19 @@ Plotly.newPlot(
         ]
     }}
 ).then(function () {{
+    // Só registramos o listener DEPOIS que Plotly inicializou o gráfico.
+    // Fazer gd.on(...) antes do newPlot deixa o gráfico em branco em alguns
+    // navegadores.
+    gd.on('plotly_relayout', function(evt) {{
+        if (evt && evt['scene.camera']) {{
+            userCamera = evt['scene.camera'];
+        }}
+    }});
+
+    userCamera = gd.layout.scene && gd.layout.scene.camera
+        ? JSON.parse(JSON.stringify(gd.layout.scene.camera))
+        : null;
+
     {autoplay_js}
 }});
 </script>
