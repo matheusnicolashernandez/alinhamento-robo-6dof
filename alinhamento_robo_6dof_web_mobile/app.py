@@ -2332,30 +2332,36 @@ with st.sidebar:
         np.asarray(q_deg, dtype=float)
     )
 
-    if st.button(
-        "Aplicar juntas",
-        use_container_width=True,
-    ):
-        st.session_state.q = manual_q
+    # As juntas são aplicadas em tempo real: cada alteração no
+    # number_input provoca o rerun normal do Streamlit e a cena é
+    # reconstruída imediatamente com a nova pose.
+    if not np.allclose(manual_q, st.session_state.q):
+        st.session_state.q = manual_q.copy()
         st.session_state.trajectory = None
         st.session_state.trajectory_cfg = None
         st.session_state.last_result = None
-        st.session_state.status = "Pose manual aplicada"
-        st.rerun()
+        st.session_state.status = "Pose manual em edição"
 
     if st.button(
         "↺ Resetar pose",
         use_container_width=True,
     ):
-        st.session_state.q = np.radians(
-            INITIAL_Q_DEG.copy()
-        )
+        reset_q = np.radians(INITIAL_Q_DEG.copy())
+        st.session_state.q = reset_q
+
+        # Atualiza também os widgets, para que os valores exibidos
+        # acompanhem imediatamente a pose restaurada.
+        for i, value in enumerate(INITIAL_Q_DEG):
+            st.session_state[f"q_deg_{i}"] = float(value)
+
         reset_history()
         st.session_state.trajectory = None
         st.session_state.trajectory_cfg = None
         st.session_state.last_result = None
         st.session_state.status = "Pose inicial restaurada"
         st.rerun()
+
+    st.caption("As juntas são atualizadas diretamente na visualização.")
 
     st.divider()
 
