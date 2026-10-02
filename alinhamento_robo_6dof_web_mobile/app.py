@@ -1769,7 +1769,7 @@ def make_animated_html(
     fig,
     snapshots,
     height=650,
-    autoplay=True,
+    autoplay=False,
     frame_delay_ms=220,
 ):
     """
@@ -1877,15 +1877,19 @@ async function applySnapshot(snapshot) {{
 }}
 
 async function startAnimation() {{
-    if (running || snapshots.length === 0) {{
+    if (snapshots.length === 0) {{
         return;
     }}
 
-    running = true;
+    // Play sempre reinicia a trajetória imediatamente.
+    // Se já estiver rodando, cancela a execução atual e começa novamente.
+    running = false;
     animationToken += 1;
+
+    running = true;
     const myToken = animationToken;
 
-    // Sempre começa da pose inicial.
+    // Volta imediatamente para a pose inicial, sem recalcular a trajetória.
     currentFrame = 0;
     await applySnapshot(snapshots[0]);
 
