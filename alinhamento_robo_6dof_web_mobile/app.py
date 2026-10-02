@@ -1058,7 +1058,6 @@ def make_scene_figure(q, cfg, robot, lasers):
             ),
             aspectmode="data",
             dragmode="orbit",
-            uirevision="camera_preserve_v26",
             camera=dict(
                 projection=dict(type="orthographic"),
                 eye=dict(
@@ -2253,6 +2252,7 @@ with st.sidebar:
         st.session_state.trajectory_cfg = None
         st.session_state.last_result = None
         st.session_state.status = "Pose manual aplicada"
+        st.rerun()
 
     if st.button(
         "↺ Resetar pose",
@@ -2320,6 +2320,83 @@ if align_clicked:
     st.session_state.q = result["final_q"]
     st.session_state.last_result = result
     st.session_state.history = result["history"]
+
+
+def make_static_scene_html(fig, height=620):
+    """Renderiza a mesma figura Plotly da tela inicial e preserva a câmera no navegador."""
+    config = {
+        "responsive": True,
+        "displaylogo": False,
+        "scrollZoom": True,
+        "displayModeBar": True,
+        "doubleClick": False,
+    }
+    html = fig.to_html(
+        full_html=False,
+        include_plotlyjs="cdn",
+        config=config,
+    )
+    camera_key = "robot_scene_camera_v27"
+    hook = f"""
+<script>
+(function() {{
+    const CAMERA_KEY = {camera_key!r};
+    const originalNewPlot = Plotly.newPlot;
+
+    function loadCamera() {{
+        try {{
+            const raw = window.localStorage.getItem(CAMERA_KEY);
+            return raw ? JSON.parse(raw) : null;
+        }} catch (e) {{
+            return null;
+        }}
+    }}
+
+    function saveCamera(gd) {{
+        try {{
+            if (gd && gd.layout && gd.layout.scene && gd.layout.scene.camera) {{
+                window.localStorage.setItem(
+                    CAMERA_KEY,
+                    JSON.stringify(gd.layout.scene.camera)
+                );
+            }}
+        }} catch (e) {{}}
+    }}
+
+    Plotly.newPlot = function(gd, data, layout, config, ...rest) {{
+        const saved = loadCamera();
+        if (saved) {{
+            layout = layout || {{}};
+            layout.scene = layout.scene || {{}};
+            layout.scene.camera = saved;
+        }}
+
+        const result = originalNewPlot.call(this, gd, data, layout, config, ...rest);
+
+        Promise.resolve(result).then(function(graph) {{
+            graph.on('plotly_relayout', function(evt) {{
+                if (!evt) return;
+                const keys = Object.keys(evt);
+                if (keys.some(function(k) {{
+                    return k === 'scene.camera' || k.indexOf('scene.camera.') === 0;
+                }})) {{
+                    saveCamera(graph);
+                }}
+            }});
+            saveCamera(graph);
+        }});
+
+        return result;
+    }};
+}})();
+</script>
+"""
+    # The hook must execute after Plotly has loaded but before fig.to_html calls Plotly.newPlot.
+    pos = html.find('Plotly.newPlot(')
+    if pos == -1:
+        return html
+    return html[:pos] + hook + html[pos:]
+
 
 # ------------------------------------------------------------
 # ÚLTIMA SIMULAÇÃO — FICA PERSISTENTE APÓS O CLIQUE
@@ -2415,15 +2492,13 @@ else:
             lasers,
         )
 
-        st.plotly_chart(
-            scene_fig,
-            width="stretch",
-            config={
-                "scrollZoom": True,
-                "displaylogo": False,
-                "displayModeBar": True,
-            },
-            key="main_robot_scene_v26",
+        components.html(
+            make_static_scene_html(
+                scene_fig,
+                height=620,
+            ),
+            height=620,
+            scrolling=False,
         )
 
         col1, col2, col3, col4 = st.columns(4)
