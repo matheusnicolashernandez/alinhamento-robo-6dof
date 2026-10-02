@@ -1,11 +1,13 @@
 
 import math
+import json
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
 import numpy as np
 import plotly.graph_objects as go
 import streamlit as st
+import streamlit.components.v1 as components
 
 
 # ============================================================
@@ -14,7 +16,7 @@ import streamlit as st
 
 st.set_page_config(
     page_title="Alinhamento Robô 6 DOF",
-    page_icon=str(Path(__file__).with_name("favicon.png")),
+    page_icon=None,
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -173,41 +175,6 @@ def cylinder_mesh_z(center, radius, height, n_theta=48, n_z=18):
 
     return xx, yy, zz
 
-
-
-def cylinder_wireframe_z(center, radius, height, n_theta=48, n_rings=5, n_generators=16):
-    """Cilindro desenhado apenas com linhas 3D.
-
-    Em navegadores móveis, a malha Surface/WebGL pode desaparecer quando a cena
-    recebe muitas atualizações durante a animação. O wireframe é muito mais
-    estável e mantém tubo/base presentes durante todo o movimento.
-    """
-    cx, cy, cz = center
-    theta = np.linspace(0.0, 2.0 * math.pi, n_theta, endpoint=True)
-    z_levels = np.linspace(cz - height/2.0, cz + height/2.0, n_rings)
-
-    xs, ys, zs = [], [], []
-
-    # Anéis horizontais.
-    for z0 in z_levels:
-        for t in theta:
-            xs.append(cx + radius * math.cos(t))
-            ys.append(cy + radius * math.sin(t))
-            zs.append(z0)
-        xs.append(None); ys.append(None); zs.append(None)
-
-    # Geratrizes verticais.
-    theta_g = np.linspace(0.0, 2.0 * math.pi, n_generators, endpoint=False)
-    z0 = cz - height/2.0
-    z1 = cz + height/2.0
-    for t in theta_g:
-        x0 = cx + radius * math.cos(t)
-        y0 = cy + radius * math.sin(t)
-        xs += [x0, x0, None]
-        ys += [y0, y0, None]
-        zs += [z0, z1, None]
-
-    return xs, ys, zs
 
 def cylinder_mesh_between(p1, p2, radius, n_theta=18):
     """Malha cilíndrica de um elo entre dois pontos."""
@@ -662,15 +629,10 @@ def scene_bounds(cfg, robot):
     lo = np.minimum(tube_min, base - base_pad)
     hi = np.maximum(tube_max, base + base_pad)
 
-    # Mesmo intervalo numérico nos três eixos: evita qualquer sensação de
-    # escala diferente entre X/Y/Z. A elipse aparente de um círculo em uma
-    # vista 3D oblíqua é apenas efeito de projeção, não deformação da escala.
-    center = (lo + hi) / 2.0
-    half = float(np.max(hi - lo)) / 2.0
-    half *= 1.08
-
-    lo = center - half
-    hi = center + half
+    # margem visual
+    span = hi - lo
+    lo -= span * 0.08
+    hi += span * 0.08
 
     return lo, hi
 
@@ -685,7 +647,7 @@ def make_scene_figure(q, cfg, robot, lasers):
     # TUBO
     # ----------------------------
 
-    tx, ty, tz = cylinder_wireframe_z(
+    xx, yy, zz = cylinder_mesh_z(
         center=(
             cfg["tube_x"],
             cfg["tube_y"],
@@ -693,19 +655,23 @@ def make_scene_figure(q, cfg, robot, lasers):
         ),
         radius=cfg["tube_diameter"]/2.0,
         height=cfg["tube_length"],
-        n_theta=48,
-        n_rings=5,
-        n_generators=16,
     )
 
-    fig.add_trace(go.Scatter3d(
-        x=tx, y=ty, z=tz,
-        mode="lines",
-        line=dict(color="#9E9E9E", width=2),
-        opacity=0.38,
+    tube_surface = go.Surface(
+        x=xx,
+        y=yy,
+        z=zz,
+        opacity=0.22,
+        colorscale=[
+            [0, "#BDBDBD"],
+            [1, "#BDBDBD"],
+        ],
+        showscale=False,
         hoverinfo="skip",
         name="Tubo",
-    ))
+    )
+
+    fig.add_trace(tube_surface)
 
     # ----------------------------
     # EIXO DO TUBO
@@ -733,7 +699,7 @@ def make_scene_figure(q, cfg, robot, lasers):
     # BASE
     # ----------------------------
 
-    bx, by, bz = cylinder_wireframe_z(
+    bx, by, bz = cylinder_mesh_z(
         center=(
             cfg["base_x"],
             cfg["base_y"],
@@ -741,17 +707,21 @@ def make_scene_figure(q, cfg, robot, lasers):
         ),
         radius=120,
         height=180,
-        n_theta=48,
-        n_rings=4,
-        n_generators=20,
+        n_theta=40,
+        n_z=8,
     )
 
     fig.add_trace(
-        go.Scatter3d(
-            x=bx, y=by, z=bz,
-            mode="lines",
-            line=dict(color="#3F3F3F", width=7),
-            opacity=0.95,
+        go.Surface(
+            x=bx,
+            y=by,
+            z=bz,
+            opacity=1.0,
+            colorscale=[
+                [0, "#555555"],
+                [1, "#555555"],
+            ],
+            showscale=False,
             hoverinfo="skip",
             name="Base",
         )
@@ -1012,14 +982,17 @@ def make_scene_figure(q, cfg, robot, lasers):
                 zeroline=False,
             ),
             aspectmode="manual",
-            aspectratio=dict(x=1, y=1, z=1),
+            aspectratio=dict(
+                x=1,
+                y=1,
+                z=1.2,
+            ),
             camera=dict(
                 eye=dict(
-                    x=0.65,
-                    y=0.65,
-                    z=3.80,
+                    x=1.55,
+                    y=1.55,
+                    z=1.15,
                 ),
-                projection=dict(type="orthographic"),
             ),
         ),
         showlegend=False,
@@ -1156,7 +1129,7 @@ def current_metrics(robot, lasers, q, cfg):
 
 
 # ============================================================
-# TRAJETÓRIA PRÉ-CALCULADA
+# TRAJETÓRIA PRÉ-CALCULADA + ANIMAÇÃO NO NAVEGADOR
 # ============================================================
 
 def solve_trajectory(q0, cfg, robot, lasers, max_iterations=300):
@@ -1203,7 +1176,8 @@ def solve_trajectory(q0, cfg, robot, lasers, max_iterations=300):
 
         if (
             max_dist_error <= cfg["dist_tol"]
-            and angle <= cfg["align_tol_deg"]
+            and
+            angle <= cfg["align_tol_deg"]
         ):
             aligned = True
             break
@@ -1233,71 +1207,679 @@ def solve_trajectory(q0, cfg, robot, lasers, max_iterations=300):
     return states, metrics
 
 
-def _sample_states(states, frame_count):
-    """Interpola os estados para uma reprodução visual mais suave."""
+def _dynamic_snapshot(q, cfg, robot, lasers):
+    """
+    Retorna somente os traces móveis.
+    A ordem é fixa para permitir animação por frames.
+    """
+
+    T = robot.fk(q, cfg)
+
+    joint_points = [
+        T["joint_1"][:3, 3],
+        T["joint_2"][:3, 3],
+        T["joint_3"][:3, 3],
+        T["joint_4"][:3, 3],
+        T["joint_5"][:3, 3],
+        T["joint_6"][:3, 3],
+    ]
+
+    traces = []
+
+    # 5 links móveis como linhas grossas.
+    # Scatter3d anima de forma mais robusta que Mesh3d no WebGL móvel.
+    link_widths = [14, 16, 15, 14, 13]
+
+    for i in range(5):
+        p1 = joint_points[i]
+        p2 = joint_points[i+1]
+
+        traces.append(
+            go.Scatter3d(
+                x=[p1[0], p2[0]],
+                y=[p1[1], p2[1]],
+                z=[p1[2], p2[2]],
+                mode="lines",
+                line=dict(
+                    color="#4682B4",
+                    width=link_widths[i],
+                ),
+                hoverinfo="skip",
+                name=f"Link {i+1}",
+            )
+        )
+
+    # Juntas.
+    jp = np.asarray(joint_points)
+
+    traces.append(
+        go.Scatter3d(
+            x=jp[:,0],
+            y=jp[:,1],
+            z=jp[:,2],
+            mode="markers",
+            marker=dict(
+                size=7,
+                color="#0B2E59",
+            ),
+            name="Juntas",
+            hoverinfo="skip",
+        )
+    )
+
+    # Retângulo direto na J6.
+    ee = T["end_effector"]
+
+    center = ee[:3, 3]
+    ex = ee[:3, 0]
+    ey = ee[:3, 1]
+    ez = ee[:3, 2]
+
+    width_axis = -ex
+    height_axis = ey
+
+    sensors = {
+        "A": center - width_axis*cfg["frame_width"]/2 - height_axis*cfg["frame_height"]/2,
+        "B": center + width_axis*cfg["frame_width"]/2 - height_axis*cfg["frame_height"]/2,
+        "C": center - width_axis*cfg["frame_width"]/2 + height_axis*cfg["frame_height"]/2,
+        "D": center + width_axis*cfg["frame_width"]/2 + height_axis*cfg["frame_height"]/2,
+    }
+
+    corners = np.array([
+        sensors["A"],
+        sensors["B"],
+        sensors["D"],
+        sensors["C"],
+        sensors["A"],
+    ])
+
+    traces.append(
+        go.Scatter3d(
+            x=corners[:,0],
+            y=corners[:,1],
+            z=corners[:,2],
+            mode="lines",
+            line=dict(
+                color="#00B8D9",
+                width=8,
+            ),
+            name="Retângulo",
+            hoverinfo="skip",
+        )
+    )
+
+    traces.append(
+        go.Scatter3d(
+            x=[center[0]],
+            y=[center[1]],
+            z=[center[2]],
+            mode="markers",
+            marker=dict(
+                size=6,
+                color="white",
+                line=dict(
+                    color="#333333",
+                    width=1,
+                ),
+            ),
+            name="Centro / J6",
+            hoverinfo="skip",
+        )
+    )
+
+    # Normal = Z_EE = direção dos lasers.
+    traces.append(
+        go.Scatter3d(
+            x=[center[0], center[0] + ez[0]*130],
+            y=[center[1], center[1] + ez[1]*130],
+            z=[center[2], center[2] + ez[2]*130],
+            mode="lines",
+            line=dict(
+                color="#AB47BC",
+                width=5,
+            ),
+            name="Normal / Laser",
+            hoverinfo="skip",
+        )
+    )
+
+    distances, data = lasers.readings(q, cfg)
+
+    for label, (p, ray, hit) in zip(
+        ["A", "B", "C", "D"],
+        data,
+    ):
+
+        traces.append(
+            go.Scatter3d(
+                x=[p[0]],
+                y=[p[1]],
+                z=[p[2]],
+                mode="markers+text",
+                marker=dict(
+                    size=6,
+                    color="#FFB300",
+                ),
+                text=[label],
+                textposition="top center",
+                textfont=dict(
+                    size=13,
+                    color="#111111",
+                ),
+                name=f"Sensor {label}",
+                hoverinfo="skip",
+                showlegend=False,
+            )
+        )
+
+        if hit is None:
+            hx = [np.nan, np.nan]
+            hy = [np.nan, np.nan]
+            hz = [np.nan, np.nan]
+            mx = [np.nan]
+            my = [np.nan]
+            mz = [np.nan]
+        else:
+            hx = [p[0], hit[0]]
+            hy = [p[1], hit[1]]
+            hz = [p[2], hit[2]]
+            mx = [hit[0]]
+            my = [hit[1]]
+            mz = [hit[2]]
+
+        traces.append(
+            go.Scatter3d(
+                x=hx,
+                y=hy,
+                z=hz,
+                mode="lines",
+                line=dict(
+                    color="#FF6D00",
+                    width=5,
+                ),
+                name=f"Laser {label}",
+                hoverinfo="skip",
+                showlegend=False,
+            )
+        )
+
+        traces.append(
+            go.Scatter3d(
+                x=mx,
+                y=my,
+                z=mz,
+                mode="markers",
+                marker=dict(
+                    size=5,
+                    color="#00C853",
+                ),
+                name=f"Impacto {label}",
+                hoverinfo="skip",
+                showlegend=False,
+            )
+        )
+
+    return traces
+
+
+def _clean_json_value(value):
+    """Converte valores NumPy/não finitos em tipos JSON nativos."""
+    if value is None:
+        return None
+
+    if isinstance(value, np.ndarray):
+        return [_clean_json_value(v) for v in value.tolist()]
+
+    if isinstance(value, np.generic):
+        value = value.item()
+
+    if isinstance(value, (list, tuple)):
+        return [_clean_json_value(v) for v in value]
+
+    if isinstance(value, float):
+        return float(value) if math.isfinite(value) else None
+
+    if isinstance(value, int):
+        return int(value)
+
+    return value
+
+
+def _dynamic_snapshot_payload(q, cfg, robot, lasers):
+    """
+    Extrai somente X/Y/Z dos traces móveis.
+    A ordem é a mesma em todos os frames.
+
+    IMPORTANTE:
+    - Não inclui tubo, eixo ou base.
+    - Esses três traces são criados uma vez e nunca são alterados
+      durante a animação.
+    """
+    dynamic = _dynamic_snapshot(q, cfg, robot, lasers)
+
+    payload = []
+
+    for trace in dynamic:
+        payload.append(
+            {
+                "x": _clean_json_value(trace.x),
+                "y": _clean_json_value(trace.y),
+                "z": _clean_json_value(trace.z),
+            }
+        )
+
+    return payload
+
+
+def _interpolate_states(states, frame_count):
+    """
+    Interpola as poses para tornar o movimento visual mais lento e suave.
+
+    A trajetória do controlador continua sendo a original.
+    A interpolação é apenas visual e não altera o cálculo.
+    """
     state_array = np.asarray(states, dtype=float)
 
-    if state_array.ndim != 2 or state_array.shape[0] == 0:
-        return np.empty((0, 6), dtype=float)
+    if len(state_array) == 1:
+        return state_array
 
-    if frame_count <= 1 or state_array.shape[0] == 1:
-        return state_array[[0]].copy()
+    frame_count = max(int(frame_count), 2)
 
-    frame_count = int(max(frame_count, 2))
-    positions = np.linspace(0.0, state_array.shape[0] - 1.0, frame_count)
-    samples = np.empty((frame_count, state_array.shape[1]), dtype=float)
+    positions = np.linspace(
+        0.0,
+        float(len(state_array) - 1),
+        frame_count,
+    )
 
-    for k, pos in enumerate(positions):
+    samples = []
+
+    for pos in positions:
         i0 = int(math.floor(pos))
-        i1 = min(i0 + 1, state_array.shape[0] - 1)
-        alpha = pos - i0
-        samples[k] = (1.0 - alpha) * state_array[i0] + alpha * state_array[i1]
+        i1 = min(i0 + 1, len(state_array) - 1)
+        a = pos - i0
 
-    return samples
+        q = (
+            (1.0 - a) * state_array[i0]
+            + a * state_array[i1]
+        )
+
+        samples.append(q)
+
+    return np.asarray(samples, dtype=float)
 
 
-def animate_server_side(states, cfg, robot, lasers, frame_count=20, delay_ms=500):
-    """Reproduz a trajetória usando o próprio Streamlit, sem JavaScript/WebGL frames.
-
-    A cada frame a cena COMPLETA é recriada. Portanto tubo, base, robô,
-    retângulo e sensores são sempre calculados e enviados juntos.
-    Essa abordagem é mais lenta que uma animação client-side, mas é muito
-    mais previsível dentro de um iframe do Streamlit Cloud em desktop/celular.
+def make_animated_scene_figure(
+    states,
+    cfg,
+    robot,
+    lasers,
+    frame_count=60,
+):
     """
-    import time
+    Cria a cena inicial e a sequência de estados para animação
+    no navegador.
 
-    samples = _sample_states(states, frame_count)
-    if samples.size == 0:
-        return 0
+    Estratégia:
+    - Os traces estáticos (tubo, eixo e base) são criados uma única vez.
+    - Os traces móveis são atualizados exclusivamente por Plotly.restyle().
+    - Não usamos Plotly Frames, Plotly.animate() ou redraw da cena 3D.
+    """
+    if not states:
+        return go.Figure(), []
 
-    scene_placeholder = st.empty()
-    progress_placeholder = st.empty()
+    # --------------------------------------------------------
+    # Interpolação APENAS visual.
+    # --------------------------------------------------------
+    samples = _interpolate_states(
+        states,
+        frame_count=frame_count,
+    )
 
-    total = len(samples)
-    delay = max(0.05, float(delay_ms) / 1000.0)
+    # --------------------------------------------------------
+    # Geometria fixa.
+    # --------------------------------------------------------
+    fig = go.Figure()
 
-    for index, q in enumerate(samples):
-        scene_fig, _ = make_scene_figure(q, cfg, robot, lasers)
+    xx, yy, zz = cylinder_mesh_z(
+        center=(
+            cfg["tube_x"],
+            cfg["tube_y"],
+            cfg["tube_z"],
+        ),
+        radius=cfg["tube_diameter"]/2.0,
+        height=cfg["tube_length"],
+    )
 
-        scene_placeholder.plotly_chart(
-            scene_fig,
-            width="stretch",
-            config={
-                "displaylogo": False,
-                "scrollZoom": False,
-            },
+    fig.add_trace(
+        go.Surface(
+            x=xx,
+            y=yy,
+            z=zz,
+            opacity=0.22,
+            colorscale=[
+                [0, "#BDBDBD"],
+                [1, "#BDBDBD"],
+            ],
+            showscale=False,
+            hoverinfo="skip",
+            name="Tubo",
         )
+    )
 
-        progress_placeholder.caption(
-            f"Simulação: quadro {index + 1}/{total}"
+    z1 = cfg["tube_z"] - cfg["tube_length"]/2
+    z2 = cfg["tube_z"] + cfg["tube_length"]/2
+
+    fig.add_trace(
+        go.Scatter3d(
+            x=[cfg["tube_x"], cfg["tube_x"]],
+            y=[cfg["tube_y"], cfg["tube_y"]],
+            z=[z1, z2],
+            mode="lines",
+            line=dict(
+                color="#E53935",
+                width=5,
+            ),
+            name="Eixo",
+            hoverinfo="skip",
         )
+    )
 
-        if index < total - 1:
-            time.sleep(delay)
+    bx, by, bz = cylinder_mesh_z(
+        center=(
+            cfg["base_x"],
+            cfg["base_y"],
+            cfg["base_z"],
+        ),
+        radius=120,
+        height=180,
+        n_theta=40,
+        n_z=8,
+    )
 
-    progress_placeholder.empty()
-    return total
+    fig.add_trace(
+        go.Surface(
+            x=bx,
+            y=by,
+            z=bz,
+            opacity=1.0,
+            colorscale=[
+                [0, "#555555"],
+                [1, "#555555"],
+            ],
+            showscale=False,
+            hoverinfo="skip",
+            name="Base",
+        )
+    )
 
+    # --------------------------------------------------------
+    # Estado inicial móvel.
+    # --------------------------------------------------------
+    dynamic0 = _dynamic_snapshot(
+        samples[0],
+        cfg,
+        robot,
+        lasers,
+    )
+
+    for trace in dynamic0:
+        fig.add_trace(trace)
+
+    # --------------------------------------------------------
+    # Camera / escala: mantidas iguais à versão original.
+    # --------------------------------------------------------
+    lo, hi = scene_bounds(cfg, robot)
+
+    fig.update_layout(
+        margin=dict(
+            l=0,
+            r=0,
+            t=5,
+            b=0,
+        ),
+        height=620,
+        paper_bgcolor="white",
+        plot_bgcolor="white",
+        showlegend=False,
+        uirevision="fixed_scene",
+        scene=dict(
+            xaxis=dict(
+                title="X (mm)",
+                range=[
+                    float(lo[0]),
+                    float(hi[0]),
+                ],
+                showgrid=True,
+                zeroline=False,
+            ),
+            yaxis=dict(
+                title="Y (mm)",
+                range=[
+                    float(lo[1]),
+                    float(hi[1]),
+                ],
+                showgrid=True,
+                zeroline=False,
+            ),
+            zaxis=dict(
+                title="Z (mm)",
+                range=[
+                    float(lo[2]),
+                    float(hi[2]),
+                ],
+                showgrid=True,
+                zeroline=False,
+            ),
+            aspectmode="manual",
+            aspectratio=dict(
+                x=1,
+                y=1,
+                z=1.2,
+            ),
+            camera=dict(
+                eye=dict(
+                    x=1.55,
+                    y=1.55,
+                    z=1.15,
+                ),
+            ),
+        ),
+    )
+
+    # --------------------------------------------------------
+    # Snapshots somente dos traces móveis.
+    # --------------------------------------------------------
+    snapshots = [
+        _dynamic_snapshot_payload(
+            q,
+            cfg,
+            robot,
+            lasers,
+        )
+        for q in samples
+    ]
+
+    return fig, snapshots
+
+
+def make_animated_html(
+    fig,
+    snapshots,
+    height=650,
+    autoplay=True,
+    frame_delay_ms=220,
+):
+    """
+    Animação client-side sem Plotly Frames.
+
+    Em cada passo:
+      Plotly.restyle() atualiza apenas os traces móveis.
+      Tubo, eixo e base não são tocados.
+    """
+    fig_json = fig.to_json()
+
+    snapshots_json = json.dumps(
+        _clean_json_value(snapshots),
+        separators=(",", ":"),
+        allow_nan=False,
+    )
+
+    autoplay_js = "startAnimation();" if autoplay else ""
+
+    html = f"""
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+<style>
+html, body {{
+    margin: 0;
+    padding: 0;
+    background: white;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    font-family: Arial, sans-serif;
+}}
+#controls {{
+    height: 38px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding-left: 4px;
+    box-sizing: border-box;
+}}
+button {{
+    border: 1px solid #b8b8b8;
+    background: #ffffff;
+    border-radius: 4px;
+    padding: 5px 10px;
+    cursor: pointer;
+    font-size: 13px;
+}}
+button:active {{
+    background: #eeeeee;
+}}
+#plot {{
+    width: 100%;
+    height: calc(100% - 38px);
+}}
+</style>
+</head>
+<body>
+<div id="controls">
+    <button id="play">▶ Play</button>
+    <button id="stop">■ Parar</button>
+</div>
+<div id="plot"></div>
+
+<script>
+const fig = {fig_json};
+const snapshots = {snapshots_json};
+const gd = document.getElementById("plot");
+
+const STATIC_COUNT = 3;
+const DYNAMIC_COUNT = fig.data.length - STATIC_COUNT;
+const DYNAMIC_INDICES = Array.from(
+    {{length: DYNAMIC_COUNT}},
+    (_, i) => STATIC_COUNT + i
+);
+
+const FRAME_DELAY = {int(frame_delay_ms)};
+let running = false;
+let currentFrame = 0;
+let animationToken = 0;
+
+function sleep(ms) {{
+    return new Promise(resolve => setTimeout(resolve, ms));
+}}
+
+async function applySnapshot(snapshot) {{
+    const x = snapshot.map(item => item.x);
+    const y = snapshot.map(item => item.y);
+    const z = snapshot.map(item => item.z);
+
+    // Uma única chamada atualiza TODOS os elementos móveis.
+    // Nenhum trace estático entra nesta operação.
+    await Plotly.restyle(
+        gd,
+        {{
+            x: x,
+            y: y,
+            z: z
+        }},
+        DYNAMIC_INDICES
+    );
+}}
+
+async function startAnimation() {{
+    if (running || snapshots.length === 0) {{
+        return;
+    }}
+
+    running = true;
+    animationToken += 1;
+    const myToken = animationToken;
+
+    // Sempre começa da pose inicial.
+    currentFrame = 0;
+    await applySnapshot(snapshots[0]);
+
+    while (
+        running &&
+        myToken === animationToken &&
+        currentFrame < snapshots.length - 1
+    ) {{
+        await sleep(FRAME_DELAY);
+
+        if (!running || myToken !== animationToken) {{
+            break;
+        }}
+
+        currentFrame += 1;
+        await applySnapshot(snapshots[currentFrame]);
+    }}
+
+    if (myToken === animationToken) {{
+        running = false;
+    }}
+}}
+
+function stopAnimation() {{
+    running = false;
+    animationToken += 1;
+}}
+
+document.getElementById("play").addEventListener(
+    "click",
+    startAnimation
+);
+
+document.getElementById("stop").addEventListener(
+    "click",
+    stopAnimation
+);
+
+Plotly.newPlot(
+    gd,
+    fig.data,
+    fig.layout,
+    {{
+        responsive: true,
+        displaylogo: false,
+        scrollZoom: false,
+        displayModeBar: false
+    }}
+).then(function () {{
+    {autoplay_js}
+}});
+</script>
+</body>
+</html>
+"""
+
+    return html
 
 # ============================================================
 # GRÁFICO
@@ -1518,16 +2100,6 @@ with st.sidebar:
         key="align_tol_deg",
     )
 
-    st.number_input(
-        "Tempo por quadro da simulação (ms)",
-        min_value=100,
-        max_value=1500,
-        value=500,
-        step=50,
-        key="animation_delay_ms",
-        help="Aumente este valor para deixar a simulação mais lenta.",
-    )
-
     st.subheader("Juntas")
 
     limits = robot.limits()
@@ -1584,13 +2156,28 @@ with st.sidebar:
         type="primary",
     )
 
+    stop_clicked = st.button(
+        "■ PARAR",
+        use_container_width=True,
+    )
+
+    if stop_clicked:
+        st.session_state.stop_requested = True
+        st.session_state.status = "Parada solicitada"
+
 cfg = config_from_widgets()
 
+if "stop_requested" not in st.session_state:
+    st.session_state.stop_requested = False
+
 if align_clicked:
+
+    st.session_state.stop_requested = False
 
     q0 = st.session_state.q.copy()
 
     with st.spinner("Calculando trajetória de alinhamento..."):
+
         states, result = solve_trajectory(
             q0,
             cfg,
@@ -1603,19 +2190,30 @@ if align_clicked:
     st.session_state.trajectory_cfg = cfg
     st.session_state.q = result["final_q"]
 
-    # --------------------------------------------------------
-    # SIMULAÇÃO
-    # --------------------------------------------------------
-    # Sem Canvas, sem Plotly Frames e sem JavaScript.
-    # O Streamlit atualiza o mesmo placeholder com a cena COMPLETA.
-    frame_count = max(12, min(24, len(states) * 2))
-    rendered_frames = animate_server_side(
+    # A trajetória é calculada uma única vez no servidor.
+    # A movimentação é reproduzida pelo navegador de forma fluida.
+    animation_fig, animation_snapshots = make_animated_scene_figure(
         states,
         cfg,
         robot,
         lasers,
-        frame_count=frame_count,
-        delay_ms=int(st.session_state["animation_delay_ms"]),
+        frame_count=60,
+    )
+
+    components.html(
+        make_animated_html(
+            animation_fig,
+            animation_snapshots,
+            height=650,
+            autoplay=True,
+            frame_delay_ms=220,
+        ),
+        height=650,
+        scrolling=False,
+    )
+
+    final_q_deg = np.degrees(
+        result["final_q"]
     )
 
     d_final, angle_final, max_dist_error_final = current_metrics(
@@ -1665,6 +2263,7 @@ if align_clicked:
         ["A", "B", "C", "D"],
         d_final,
     ):
+
         with c:
             st.metric(
                 f"Laser {label}",
@@ -1680,6 +2279,8 @@ if align_clicked:
     # ----------------------------
 
     history = result["history"]
+
+    # Usa o histórico calculado diretamente, sem depender de reruns.
     original_history = st.session_state.history
     st.session_state.history = history
 
@@ -1693,11 +2294,10 @@ if align_clicked:
 
     st.session_state.history = original_history
 
-    st.info(
-        f"Trajetória calculada: {result['iterations']} iterações • "
-        f"{rendered_frames} quadros visuais. "
-        "A simulação atualiza a cena completa a cada quadro para manter "
-        "tubo, base, robô e sensores sincronizados."
+    st.caption(
+        "A animação é reproduzida no navegador. "
+        "O tubo e a base permanecem estáticos; apenas os elementos móveis "
+        "são atualizados durante o movimento."
     )
 
 # ------------------------------------------------------------
