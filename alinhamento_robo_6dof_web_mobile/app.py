@@ -1058,6 +1058,7 @@ def make_scene_figure(q, cfg, robot, lasers):
             ),
             aspectmode="data",
             dragmode="orbit",
+            uirevision="camera_preserve_v26",
             camera=dict(
                 projection=dict(type="orthographic"),
                 eye=dict(
@@ -1999,100 +2000,6 @@ Plotly.newPlot(
 
     return html
 
-
-def make_static_html(fig, height=650):
-    """Cena inicial em HTML/Plotly para preservar a câmera entre reruns do Streamlit."""
-    fig_json = fig.to_json()
-    camera_key = "robot_scene_camera_v25"
-
-    html = f"""
-<!DOCTYPE html>
-<html>
-<head>
-<meta charset="utf-8">
-<script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
-<style>
-html, body {{
-    margin: 0;
-    padding: 0;
-    background: white;
-    width: 100%;
-    height: 100%;
-    overflow: hidden;
-}}
-#plot {{
-    width: 100%;
-    height: 100%;
-}}
-</style>
-</head>
-<body>
-<div id="plot"></div>
-<script>
-const fig = {fig_json};
-const gd = document.getElementById("plot");
-const CAMERA_KEY = "{camera_key}";
-
-function readSavedCamera() {{
-    try {{
-        const raw = localStorage.getItem(CAMERA_KEY);
-        return raw ? JSON.parse(raw) : null;
-    }} catch (e) {{
-        return null;
-    }}
-}}
-
-function saveCamera() {{
-    try {{
-        if (gd.layout && gd.layout.scene && gd.layout.scene.camera) {{
-            localStorage.setItem(
-                CAMERA_KEY,
-                JSON.stringify(gd.layout.scene.camera)
-            );
-        }}
-    }} catch (e) {{}}
-}}
-
-const savedCamera = readSavedCamera();
-if (savedCamera) {{
-    fig.layout.scene = fig.layout.scene || {{}};
-    fig.layout.scene.camera = savedCamera;
-}}
-
-Plotly.newPlot(
-    gd,
-    fig.data,
-    fig.layout,
-    {{
-        responsive: true,
-        displaylogo: false,
-        scrollZoom: true,
-        displayModeBar: true,
-        modeBarButtonsToAdd: [
-            "resetCameraDefault",
-            "resetCameraLastSave"
-        ],
-        doubleClick: false
-    }}
-).then(function () {{
-    gd.on('plotly_relayout', function(evt) {{
-        if (!evt) return;
-        const keys = Object.keys(evt);
-        if (keys.some(k => k === 'scene.camera' || k.startsWith('scene.camera.'))) {{
-            saveCamera();
-        }}
-    }});
-
-    // Salva também a câmera inicial, para que o primeiro movimento
-    // feito pelo usuário já fique disponível no próximo rerun.
-    saveCamera();
-}});
-</script>
-</body>
-</html>
-"""
-    return html
-
 # ============================================================
 # GRÁFICO
 # ============================================================
@@ -2194,13 +2101,6 @@ lasers = FourLasers(robot)
 initialize_state(robot)
 
 st.title("Alinhamento automático — Robô 6 DOF + 4 lasers")
-
-st.markdown("""<style>
-div[data-testid="stButton"] button[kind="primary"] { background-color:#16a34a; border-color:#16a34a; color:white; font-weight:700; }
-div[data-testid="stButton"] button[kind="primary"]:hover { background-color:#15803d; border-color:#15803d; color:white; }
-</style>""", unsafe_allow_html=True)
-
-align_clicked = st.button("▶ ALINHAR AUTOMATICAMENTE", use_container_width=True, type="primary")
 st.caption(
     "Versão web para celular/tablet. "
     "O cálculo continua baseado no normal.urdf."
@@ -2366,9 +2266,15 @@ with st.sidebar:
         st.session_state.trajectory_cfg = None
         st.session_state.last_result = None
         st.session_state.status = "Pose inicial restaurada"
+        st.rerun()
 
     st.divider()
 
+    align_clicked = st.button(
+        "▶ ALINHAR AUTOMATICAMENTE",
+        use_container_width=True,
+        type="primary",
+    )
 
     stop_clicked = st.button(
         "■ PARAR",
@@ -2509,13 +2415,15 @@ else:
             lasers,
         )
 
-        components.html(
-            make_static_html(
-                scene_fig,
-                height=650,
-            ),
-            height=650,
-            scrolling=False,
+        st.plotly_chart(
+            scene_fig,
+            width="stretch",
+            config={
+                "scrollZoom": True,
+                "displaylogo": False,
+                "displayModeBar": True,
+            },
+            key="main_robot_scene_v26",
         )
 
         col1, col2, col3, col4 = st.columns(4)
