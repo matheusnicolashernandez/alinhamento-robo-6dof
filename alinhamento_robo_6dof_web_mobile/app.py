@@ -1056,12 +1056,8 @@ def make_scene_figure(q, cfg, robot, lasers):
                 showgrid=True,
                 zeroline=False,
             ),
-            aspectmode="manual",
-            aspectratio=dict(
-                x=1,
-                y=1,
-                z=1.2,
-            ),
+            aspectmode="cube",
+            dragmode="orbit",
             camera=dict(
                 eye=dict(
                     x=1.55,
@@ -1623,7 +1619,7 @@ def make_animated_scene_figure(
             center=(cfg["tube_x"], cfg["tube_y"], cfg["tube_z"]),
             radius=cfg["tube_diameter"] / 2.0,
             height=cfg["tube_length"],
-            color="rgba(189,189,189,0.48)",
+            color="#111111",
             width=2,
             n_theta=72,
             n_z=27,
@@ -1736,12 +1732,8 @@ def make_animated_scene_figure(
                 showgrid=True,
                 zeroline=False,
             ),
-            aspectmode="manual",
-            aspectratio=dict(
-                x=1,
-                y=1,
-                z=1.2,
-            ),
+            aspectmode="cube",
+            dragmode="orbit",
             camera=dict(
                 eye=dict(
                     x=1.55,
@@ -1934,8 +1926,12 @@ Plotly.newPlot(
     {{
         responsive: true,
         displaylogo: false,
-        scrollZoom: false,
-        displayModeBar: false
+        scrollZoom: true,
+        displayModeBar: true,
+        modeBarButtonsToAdd: [
+            "resetCameraDefault",
+            "resetCameraLastSave"
+        ]
     }}
 ).then(function () {{
     {autoplay_js}
