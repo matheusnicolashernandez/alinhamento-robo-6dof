@@ -176,6 +176,39 @@ def cylinder_mesh_z(center, radius, height, n_theta=48, n_z=18):
     return xx, yy, zz
 
 
+def cylinder_wireframe_trace(center, radius, height, color="rgba(189,189,189,0.55)", width=2, n_theta=64, n_z=24, n_vertical=16, name="Tubo"):
+    """Cilindro como malha Scatter3d estática, robusta durante restyle."""
+    cx, cy, cz = map(float, center)
+    theta = np.linspace(0.0, 2.0 * math.pi, n_theta)
+    levels = np.linspace(cz - height / 2.0, cz + height / 2.0, n_z)
+    x, y, z = [], [], []
+
+    for zz in levels:
+        for th in theta:
+            x.append(cx + radius * math.cos(th))
+            y.append(cy + radius * math.sin(th))
+            z.append(zz)
+        x.append(None); y.append(None); z.append(None)
+
+    for k in range(n_vertical):
+        th = 2.0 * math.pi * k / n_vertical
+        xx = cx + radius * math.cos(th)
+        yy = cy + radius * math.sin(th)
+        x.extend([xx, xx, None])
+        y.extend([yy, yy, None])
+        z.extend([cz - height / 2.0, cz + height / 2.0, None])
+
+    return go.Scatter3d(
+        x=x, y=y, z=z,
+        mode="lines",
+        line=dict(color=color, width=width),
+        hoverinfo="skip",
+        showlegend=False,
+        name=name,
+        connectgaps=False,
+    )
+
+
 def cylinder_mesh_z_mesh3d(center, radius, height, n_theta=64):
     """Malha lateral de um cilindro para go.Mesh3d.
 
@@ -1563,7 +1596,7 @@ def make_animated_scene_figure(
 
     Estratégia:
     - Os traces estáticos (tubo, eixo e base) são criados uma única vez.
-    - O tubo usa a malha Surface estática, como na versão original.
+    - O tubo usa Mesh3d estático para maior estabilidade no WebGL móvel.
     - Os traces móveis são atualizados exclusivamente por Plotly.restyle().
     - Não usamos Plotly Frames, Plotly.animate() ou redraw da cena 3D.
     """
@@ -1583,33 +1616,19 @@ def make_animated_scene_figure(
     # --------------------------------------------------------
     fig = go.Figure()
 
-    # Trace 0: tubo estático usando a malha Surface que já funcionava bem
-    # na versão original. Ele não participa de nenhuma restyle da animação.
-    tx, ty, tz = cylinder_mesh_z(
-        center=(
-            cfg["tube_x"],
-            cfg["tube_y"],
-            cfg["tube_z"],
-        ),
-        radius=cfg["tube_diameter"]/2.0,
-        height=cfg["tube_length"],
-    )
-
+    # Trace 0: tubo estático em malha Scatter3d.
+    # Não entra em nenhuma restyle da animação.
     fig.add_trace(
-        go.Surface(
-            x=tx,
-            y=ty,
-            z=tz,
-            opacity=0.22,
-            colorscale=[
-                [0, "#BDBDBD"],
-                [1, "#BDBDBD"],
-            ],
-            showscale=False,
-            hoverinfo="skip",
+        cylinder_wireframe_trace(
+            center=(cfg["tube_x"], cfg["tube_y"], cfg["tube_z"]),
+            radius=cfg["tube_diameter"] / 2.0,
+            height=cfg["tube_length"],
+            color="rgba(189,189,189,0.48)",
+            width=2,
+            n_theta=72,
+            n_z=27,
+            n_vertical=18,
             name="Tubo",
-            connectgaps=True,
-            hidesurface=False,
         )
     )
 
