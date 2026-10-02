@@ -2075,32 +2075,12 @@ def make_static_camera_html_v32(fig, height=620):
         }});
     }}
 
-    // O problema da primeira abertura era o gráfico nascer antes de o
-    // elemento HTML ter recebido sua largura real. Em vez de criar o
-    // gráfico e depois tentar consertar com vários resizes, esperamos
-    // o tamanho real e só então fazemos o primeiro Plotly.newPlot().
-    function waitForRealSize(attempt) {{
-        const w = container.clientWidth;
-        const h = container.clientHeight;
-        if (w >= 300 && h >= 300) {{
-            render();
-            return;
-        }}
-        if (attempt < 60) {{
-            requestAnimationFrame(function() {{
-                waitForRealSize(attempt + 1);
-            }});
-        }} else {{
-            render();
-        }}
-    }}
-
     if (window.Plotly) {{
-        waitForRealSize(0);
+        render();
     }} else {{
         const script = document.createElement("script");
         script.src = "https://cdn.plot.ly/plotly-latest.min.js";
-        script.onload = function() {{ waitForRealSize(0); }};
+        script.onload = render;
         document.head.appendChild(script);
     }}
 }})();
@@ -2213,6 +2193,20 @@ st.caption(
     "Versão web para celular/tablet. "
     "O cálculo continua baseado no normal.urdf."
 )
+
+# ------------------------------------------------------------
+# ATUALIZAÇÃO DAS JUNTAS EM TEMPO REAL
+# ------------------------------------------------------------
+
+def update_joint_from_widget(i):
+    """Atualiza somente a pose quando o usuário altera uma junta."""
+    value_deg = float(st.session_state[f"q_deg_{i}"])
+    st.session_state.q[i] = math.radians(value_deg)
+    st.session_state.trajectory = None
+    st.session_state.trajectory_cfg = None
+    st.session_state.last_result = None
+    st.session_state.status = "Pose manual em edição"
+
 
 # ------------------------------------------------------------
 # SIDEBAR
@@ -2344,23 +2338,13 @@ with st.sidebar:
             ),
             step=1.0,
             key=f"q_deg_{i}",
+            on_change=update_joint_from_widget,
+            args=(i,),
         )
 
         q_deg.append(value)
 
-    manual_q = np.radians(
-        np.asarray(q_deg, dtype=float)
-    )
-
-    # As juntas são aplicadas em tempo real: cada alteração no
-    # number_input provoca o rerun normal do Streamlit e a cena é
-    # reconstruída imediatamente com a nova pose.
-    if not np.allclose(manual_q, st.session_state.q):
-        st.session_state.q = manual_q.copy()
-        st.session_state.trajectory = None
-        st.session_state.trajectory_cfg = None
-        st.session_state.last_result = None
-        st.session_state.status = "Pose manual em edição"
+    st.caption("As juntas são atualizadas diretamente na visualização.")
 
     if st.button(
         "↺ Resetar pose",
@@ -2368,20 +2352,14 @@ with st.sidebar:
     ):
         reset_q = np.radians(INITIAL_Q_DEG.copy())
         st.session_state.q = reset_q
-
-        # Atualiza também os widgets, para que os valores exibidos
-        # acompanhem imediatamente a pose restaurada.
         for i, value in enumerate(INITIAL_Q_DEG):
             st.session_state[f"q_deg_{i}"] = float(value)
-
         reset_history()
         st.session_state.trajectory = None
         st.session_state.trajectory_cfg = None
         st.session_state.last_result = None
         st.session_state.status = "Pose inicial restaurada"
         st.rerun()
-
-    st.caption("As juntas são atualizadas diretamente na visualização.")
 
     st.divider()
 
