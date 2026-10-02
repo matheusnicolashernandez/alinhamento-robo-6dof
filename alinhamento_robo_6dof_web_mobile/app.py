@@ -176,6 +176,45 @@ def cylinder_mesh_z(center, radius, height, n_theta=48, n_z=18):
     return xx, yy, zz
 
 
+def cylinder_wireframe_trace(center, radius, height, color, width=2, n_theta=64, n_z=30, longitudinal_step=4, name="Cilindro"):
+    """Malha cilíndrica estática usando apenas Scatter3d.
+
+    Serve como representação robusta do tubo/base durante a animação:
+    Scatter3d não participa do problema observado com Surface/Mesh3d após
+    restyle dos traces móveis.
+    """
+    cx, cy, cz = map(float, center)
+    theta = np.linspace(0.0, 2.0 * math.pi, n_theta)
+    levels = np.linspace(cz - height/2.0, cz + height/2.0, n_z)
+    x=[]; y=[]; z=[]
+
+    for zz in levels:
+        for th in theta:
+            x.append(cx + radius*math.cos(th))
+            y.append(cy + radius*math.sin(th))
+            z.append(zz)
+        x.append(None); y.append(None); z.append(None)
+
+    for k, th in enumerate(theta[:-1]):
+        if k % longitudinal_step != 0:
+            continue
+        xx = cx + radius*math.cos(th)
+        yy = cy + radius*math.sin(th)
+        x.extend([xx, xx, None])
+        y.extend([yy, yy, None])
+        z.extend([cz-height/2.0, cz+height/2.0, None])
+
+    return go.Scatter3d(
+        x=x, y=y, z=z,
+        mode="lines",
+        line=dict(color=color, width=width),
+        hoverinfo="skip",
+        showlegend=False,
+        name=name,
+        connectgaps=False,
+    )
+
+
 def cylinder_mesh_z_mesh3d(center, radius, height, n_theta=64):
     """Malha lateral de um cilindro para go.Mesh3d.
 
@@ -1562,8 +1601,8 @@ def make_animated_scene_figure(
     no navegador.
 
     Estratégia:
-    - Os traces estáticos (tubo, eixo e base) são criados uma única vez.
-    - O tubo usa a malha Surface estática, como na versão original.
+    - Os traces estáticos são criados uma única vez.
+    - Tube/base têm a geometria original e uma malha Scatter3d de fallback.
     - Os traces móveis são atualizados exclusivamente por Plotly.restyle().
     - Não usamos Plotly Frames, Plotly.animate() ou redraw da cena 3D.
     """
@@ -1583,9 +1622,7 @@ def make_animated_scene_figure(
     # --------------------------------------------------------
     fig = go.Figure()
 
-    # Trace 0: tubo estático usando a malha Surface que já funcionava bem
-    # na versão original. Ele não participa de nenhuma restyle da animação.
-    tx, ty, tz = cylinder_mesh_z(
+    tx, ty, tz, ti, tj, tk = cylinder_mesh_z_mesh3d(
         center=(
             cfg["tube_x"],
             cfg["tube_y"],
@@ -1595,21 +1632,37 @@ def make_animated_scene_figure(
         height=cfg["tube_length"],
     )
 
+    # Trace 0: tubo estático. Não entra em nenhuma restyle da animação.
     fig.add_trace(
-        go.Surface(
+        go.Mesh3d(
             x=tx,
             y=ty,
             z=tz,
+            i=ti,
+            j=tj,
+            k=tk,
             opacity=0.22,
-            colorscale=[
-                [0, "#BDBDBD"],
-                [1, "#BDBDBD"],
-            ],
-            showscale=False,
+            color="#BDBDBD",
             hoverinfo="skip",
             name="Tubo",
-            connectgaps=True,
-            hidesurface=False,
+            flatshading=False,
+            lighting=dict(ambient=0.75, diffuse=0.25, specular=0.05),
+        )
+    )
+
+    # Fallback estático: malha Scatter3d. Se o WebGL descartar o Mesh3d
+    # durante o restyle, esta malha continua visível.
+    fig.add_trace(
+        cylinder_wireframe_trace(
+            center=(cfg["tube_x"], cfg["tube_y"], cfg["tube_z"]),
+            radius=cfg["tube_diameter"]/2.0,
+            height=cfg["tube_length"],
+            color="rgba(150,150,150,0.38)",
+            width=2,
+            n_theta=64,
+            n_z=30,
+            longitudinal_step=4,
+            name="Malha do tubo",
         )
     )
 
@@ -1656,6 +1709,21 @@ def make_animated_scene_figure(
             showscale=False,
             hoverinfo="skip",
             name="Base",
+        )
+    )
+
+    # Fallback estático da base em Scatter3d.
+    fig.add_trace(
+        cylinder_wireframe_trace(
+            center=(cfg["base_x"], cfg["base_y"], cfg["base_z"]),
+            radius=120.0,
+            height=180.0,
+            color="#444444",
+            width=5,
+            n_theta=48,
+            n_z=10,
+            longitudinal_step=3,
+            name="Malha da base",
         )
     )
 
@@ -1826,7 +1894,7 @@ const fig = {fig_json};
 const snapshots = {snapshots_json};
 const gd = document.getElementById("plot");
 
-const STATIC_COUNT = 3;
+const STATIC_COUNT = 5;
 const DYNAMIC_COUNT = fig.data.length - STATIC_COUNT;
 const DYNAMIC_INDICES = Array.from(
     {{length: DYNAMIC_COUNT}},
@@ -1918,7 +1986,14 @@ Plotly.newPlot(
         scrollZoom: false,
         displayModeBar: false
     }}
-).then(function () {{
+}}).then(function () {{
+    // Força os cinco traces estáticos a permanecerem visíveis após a criação.
+    return Plotly.restyle(
+        gd,
+        {{visible: [true, true, true, true, true]}},
+        [0, 1, 2, 3, 4]
+    );
+}}).then(function () {{
     {autoplay_js}
 }});
 </script>
