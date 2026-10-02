@@ -739,32 +739,25 @@ def make_scene_figure(q, cfg, robot, lasers):
         T["joint_6"][:3, 3],
     ]
 
-    link_radii = [26, 30, 28, 26, 24]
+    # Links como linhas grossas em vez de Mesh3d.
+    # Isso evita um problema de desaparecimento dos elos durante a
+    # animação WebGL/Plotly no navegador móvel.
+    link_widths = [14, 16, 15, 14, 13]
 
     for i in range(5):
-
-        mesh = cylinder_mesh_between(
-            joint_points[i],
-            joint_points[i+1],
-            link_radii[i],
-        )
-
-        if mesh is None:
-            continue
-
-        x, y, z, ii, jj, kk = mesh
+        p1 = joint_points[i]
+        p2 = joint_points[i+1]
 
         fig.add_trace(
-            go.Mesh3d(
-                x=x,
-                y=y,
-                z=z,
-                i=ii,
-                j=jj,
-                k=kk,
-                color="#4682B4",
-                opacity=0.92,
-                flatshading=False,
+            go.Scatter3d(
+                x=[p1[0], p2[0]],
+                y=[p1[1], p2[1]],
+                z=[p1[2], p2[2]],
+                mode="lines",
+                line=dict(
+                    color="#4682B4",
+                    width=link_widths[i],
+                ),
                 hoverinfo="skip",
                 name=f"Link {i+1}",
             )
@@ -1232,30 +1225,24 @@ def _dynamic_snapshot(q, cfg, robot, lasers):
 
     traces = []
 
-    # 5 links móveis.
-    link_radii = [26, 30, 28, 26, 24]
+    # 5 links móveis como linhas grossas.
+    # Scatter3d anima de forma mais robusta que Mesh3d no WebGL móvel.
+    link_widths = [14, 16, 15, 14, 13]
 
     for i in range(5):
-
-        mesh = cylinder_mesh_between(
-            joint_points[i],
-            joint_points[i+1],
-            link_radii[i],
-        )
-
-        x, y, z, ii, jj, kk = mesh
+        p1 = joint_points[i]
+        p2 = joint_points[i+1]
 
         traces.append(
-            go.Mesh3d(
-                x=x,
-                y=y,
-                z=z,
-                i=ii,
-                j=jj,
-                k=kk,
-                color="#4682B4",
-                opacity=0.92,
-                flatshading=False,
+            go.Scatter3d(
+                x=[p1[0], p2[0]],
+                y=[p1[1], p2[1]],
+                z=[p1[2], p2[2]],
+                mode="lines",
+                line=dict(
+                    color="#4682B4",
+                    width=link_widths[i],
+                ),
                 hoverinfo="skip",
                 name=f"Link {i+1}",
             )
@@ -1660,7 +1647,7 @@ def make_animated_scene_figure(states, cfg, robot, lasers, frame_count=120):
                                     redraw=True,
                                 ),
                                 transition=dict(
-                                    duration=20,
+                                    duration=0,
                                 ),
                                 fromcurrent=True,
                                 mode="immediate",
