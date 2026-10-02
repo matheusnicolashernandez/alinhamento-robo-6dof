@@ -1795,7 +1795,7 @@ def make_animated_html(
 <html>
 <head>
 <meta charset="utf-8">
-<script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+<script src="https://cdn.plot.ly/plotly-6.5.2.min.js"></script>
 <style>
 html, body {{
     margin: 0;
@@ -2425,7 +2425,7 @@ else:
 <head>
 <meta charset="utf-8">
 <style>html, body {{ margin:0; padding:0; width:100%; height:100%; overflow:hidden; }}</style>
-<script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+<script src="https://cdn.plot.ly/plotly-6.5.2.min.js"></script>
 </head>
 <body>
 <div id="main_robot_scene" style="width:100%;height:650px;"></div>
