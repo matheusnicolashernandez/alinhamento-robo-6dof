@@ -2015,7 +2015,6 @@ def make_static_camera_html_v32(fig, height=620):
 
     const CAMERA_KEY = "{camera_key}";
     const FIG = {fig_json};
-    let rendered = false;
 
     function getSavedCamera() {{
         try {{
@@ -2033,142 +2032,90 @@ def make_static_camera_html_v32(fig, height=620):
         }} catch (e) {{}}
     }}
 
-    function waitForStableContainer(callback) {{
-        let frames = 0;
-        function check() {{
-            const width = container.clientWidth;
-            const height = container.clientHeight;
-
-            if (width > 100 && height > 100) {{
-                frames += 1;
-            }} else {{
-                frames = 0;
-            }}
-
-            // Espera alguns frames com o tamanho já definido pelo Streamlit.
-            // Isso evita que o Plotly monte a cena antes do container terminar
-            // de receber sua largura/altura.
-            if (frames >= 3) {{
-                callback();
-                return;
-            }}
-
-            requestAnimationFrame(check);
-        }}
-        requestAnimationFrame(check);
-    }}
-
     function render() {{
-        if (!window.Plotly || rendered) return;
+        if (!window.Plotly) return;
 
-        waitForStableContainer(function() {{
-            if (rendered) return;
-            rendered = true;
+        const savedCamera = getSavedCamera();
+        if (savedCamera) {{
+            FIG.layout = FIG.layout || {{}};
+            FIG.layout.scene = FIG.layout.scene || {{}};
+            FIG.layout.scene.camera = savedCamera;
+        }}
 
-            const savedCamera = getSavedCamera();
-            if (savedCamera) {{
-                FIG.layout = FIG.layout || {{}};
-                FIG.layout.scene = FIG.layout.scene || {{}};
-                FIG.layout.scene.camera = savedCamera;
+        Plotly.newPlot(
+            container,
+            FIG.data,
+            FIG.layout,
+            {{
+                responsive: true,
+                displaylogo: false,
+                scrollZoom: true,
+                displayModeBar: true,
+                modeBarButtonsToAdd: [
+                    "resetCameraDefault",
+                    "resetCameraLastSave"
+                ]
             }}
-
-            Plotly.newPlot(
-                container,
-                FIG.data,
-                FIG.layout,
-                {{
-                    responsive: true,
-                    displaylogo: false,
-                    scrollZoom: true,
-                    displayModeBar: true,
-                    modeBarButtonsToAdd: [
-                        "resetCameraDefault",
-                        "resetCameraLastSave"
-                    ]
+        ).then(function(gd) {{
+            gd.on("plotly_relayout", function(evt) {{
+                if (!evt) return;
+                const keys = Object.keys(evt);
+                if (keys.some(k => k === "scene.camera" || k.startsWith("scene.camera."))) {{
+                    saveCamera(gd);
                 }}
-            ).then(function(gd) {{
-                gd.on("plotly_relayout", function(evt) {{
-                    if (!evt) return;
-                    const keys = Object.keys(evt);
-                    if (keys.some(k => k === "scene.camera" || k.startsWith("scene.camera."))) {{
-                        saveCamera(gd);
+            }});
+
+            gd.addEventListener("mouseup", function() {{
+                setTimeout(function() {{ saveCamera(gd); }}, 0);
+            }});
+            gd.addEventListener("touchend", function() {{
+                setTimeout(function() {{ saveCamera(gd); }}, 0);
+            }}, {{passive:true}});
+
+            saveCamera(gd);
+
+            // CORREÇÃO SOMENTE NA PRIMEIRA ABERTURA.
+            // Depois disso, nenhuma reconstrução extra é feita quando o
+            // usuário altera as juntas. Assim preservamos a fluidez.
+            setTimeout(function() {{
+                try {{
+                    const FLAG = "robot_scene_initial_render_v47";
+                    if (window.localStorage.getItem(FLAG) === "1") return;
+
+                    const cameraBefore = gd.layout && gd.layout.scene
+                        ? gd.layout.scene.camera
+                        : null;
+
+                    if (cameraBefore) {{
+                        FIG.layout.scene.camera = JSON.parse(
+                            JSON.stringify(cameraBefore)
+                        );
                     }}
-                }});
 
-                gd.addEventListener("mouseup", function() {{
-                    setTimeout(function() {{ saveCamera(gd); }}, 0);
-                }});
-                gd.addEventListener("touchend", function() {{
-                    setTimeout(function() {{ saveCamera(gd); }}, 0);
-                }}, {{passive:true}});
-
-                // Primeiro garante que o WebGL foi dimensionado com o tamanho
-                // final do componente.
-                requestAnimationFrame(function() {{
-                    requestAnimationFrame(function() {{
+                    Plotly.react(
+                        gd,
+                        FIG.data,
+                        FIG.layout,
+                        {{
+                            responsive: true,
+                            displaylogo: false,
+                            scrollZoom: true,
+                            displayModeBar: true,
+                            modeBarButtonsToAdd: [
+                                "resetCameraDefault",
+                                "resetCameraLastSave"
+                            ]
+                        }}
+                    ).then(function() {{
                         try {{
                             Plotly.Plots.resize(gd);
+                            window.localStorage.setItem(FLAG, "1");
                         }} catch (e) {{}}
                     }});
-                }});
-
-                // Se o Streamlit mudar o tamanho do componente depois da
-                // primeira renderização, redimensiona o Plotly sem recriá-lo.
-                if (window.ResizeObserver) {{
-                    const observer = new ResizeObserver(function() {{
-                        try {{ Plotly.Plots.resize(gd); }} catch (e) {{}}
-                    }});
-                    observer.observe(container);
+                }} catch (e) {{
+                    console.warn("Correção inicial da cena não aplicada:", e);
                 }}
-
-                // Correção SOMENTE no primeiro carregamento da página.
-                // O segundo react resolve o problema inicial de Mesh3d/Surface,
-                // mas fazê-lo em todo rerun (cada mudança de junta) causa
-                // piscadas. sessionStorage sobrevive aos reruns do Streamlit,
-                // mas é zerado quando a aba é recarregada.
-                setTimeout(function() {{
-                    try {{
-                        const INIT_KEY = "robot_scene_initial_fix_v46";
-                        if (window.sessionStorage.getItem(INIT_KEY) === "1") {{
-                            return;
-                        }}
-
-                        const camera = gd.layout && gd.layout.scene
-                            ? JSON.parse(JSON.stringify(gd.layout.scene.camera))
-                            : null;
-
-                        Plotly.react(
-                            gd,
-                            FIG.data,
-                            FIG.layout,
-                            {{
-                                responsive: true,
-                                displaylogo: false,
-                                scrollZoom: true,
-                                displayModeBar: true,
-                                modeBarButtonsToAdd: [
-                                    "resetCameraDefault",
-                                    "resetCameraLastSave"
-                                ]
-                            }}
-                        ).then(function() {{
-                            if (camera) {{
-                                return Plotly.relayout(gd, {{
-                                    "scene.camera": camera
-                                }});
-                            }}
-                        }}).then(function() {{
-                            window.sessionStorage.setItem(INIT_KEY, "1");
-                        }}).catch(function(e) {{
-                            console.warn("Correção inicial da cena não aplicada:", e);
-                        }});
-                    }} catch (e) {{
-                        console.warn("Correção inicial da cena não aplicada:", e);
-                    }}
-                }}, 250);
-
-                saveCamera(gd);
-            }});
+            }}, 350);
         }});
     }}
 
@@ -2286,7 +2233,10 @@ lasers = FourLasers(robot)
 initialize_state(robot)
 
 st.title("Alinhamento automático — Robô 6 DOF + 4 lasers")
-
+st.caption(
+    "Versão web para celular/tablet. "
+    "O cálculo continua baseado no normal.urdf."
+)
 
 # ------------------------------------------------------------
 # SIDEBAR
@@ -2680,4 +2630,9 @@ else:
             config={
                 "displaylogo": False,
             },
+        )
+
+        st.caption(
+            "O retângulo está acoplado diretamente à J6; "
+            "o Z do end-effector é a normal/perpendicular dos lasers."
         )
