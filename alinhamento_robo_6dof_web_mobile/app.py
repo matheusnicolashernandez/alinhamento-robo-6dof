@@ -1059,7 +1059,14 @@ def make_scene_figure(q, cfg, robot, lasers):
             ),
             aspectmode="data",
             dragmode="orbit",
-            uirevision="robot_camera",
+            camera=dict(
+                projection=dict(type="orthographic"),
+                eye=dict(
+                    x=1.55,
+                    y=1.55,
+                    z=1.15,
+                ),
+            ),
         ),
         showlegend=False,
     )
@@ -2118,6 +2125,123 @@ def make_static_camera_html_v32(fig, height=620):
 """
     return html
 
+
+# ============================================================
+# PERSISTÊNCIA REAL DA CÂMERA (CLIENTE)
+# ============================================================
+
+def camera_persistence_html():
+    """
+    Mantém a câmera do gráfico 3D entre reruns do Streamlit.
+
+    O st.plotly_chart não expõe o evento de relayout da câmera para o
+    Python. Por isso, usamos um pequeno script no DOM principal apenas
+    para salvar/restaurar scene.camera. A renderização da figura continua
+    100% nativa com st.plotly_chart.
+    """
+    return """
+<script>
+(function () {
+    const CAMERA_KEY = "robot_scene_camera_native_v1";
+    const ROOT_SELECTOR = ".st-key-robot_3d_scene";
+
+    function validCamera(camera) {
+        return !!(
+            camera &&
+            camera.eye &&
+            camera.center &&
+            camera.up
+        );
+    }
+
+    function readCamera() {
+        try {
+            const raw = window.localStorage.getItem(CAMERA_KEY);
+            if (!raw) return null;
+            const camera = JSON.parse(raw);
+            return validCamera(camera) ? camera : null;
+        } catch (e) {
+            return null;
+        }
+    }
+
+    function writeCamera(gd) {
+        try {
+            const camera = gd && gd.layout && gd.layout.scene && gd.layout.scene.camera;
+            if (validCamera(camera)) {
+                window.localStorage.setItem(
+                    CAMERA_KEY,
+                    JSON.stringify(camera)
+                );
+            }
+        } catch (e) {}
+    }
+
+    function applySavedCamera(gd) {
+        const saved = readCamera();
+        if (!saved || !gd || !window.Plotly) return;
+
+        try {
+            Plotly.relayout(gd, {
+                "scene.camera": saved
+            });
+        } catch (e) {}
+    }
+
+    function attach(gd) {
+        if (!gd || gd.dataset.robotCameraPersistence === "1") return;
+
+        gd.dataset.robotCameraPersistence = "1";
+
+        gd.on("plotly_relayout", function (evt) {
+            if (!evt) return;
+
+            const keys = Object.keys(evt);
+            const cameraChanged = keys.some(function (k) {
+                return k === "scene.camera" || k.indexOf("scene.camera.") === 0;
+            });
+
+            if (cameraChanged) {
+                writeCamera(gd);
+            }
+        });
+
+        requestAnimationFrame(function () {
+            requestAnimationFrame(function () {
+                applySavedCamera(gd);
+            });
+        });
+    }
+
+    function findChart() {
+        const root = document.querySelector(ROOT_SELECTOR);
+        if (!root) return null;
+        return root.querySelector(".js-plotly-plot");
+    }
+
+    function scan() {
+        const gd = findChart();
+        if (gd) attach(gd);
+    }
+
+    scan();
+
+    if (!window.__robotCameraObserverV1) {
+        const observer = new MutationObserver(function () {
+            scan();
+        });
+
+        observer.observe(document.body, {
+            childList: true,
+            subtree: true
+        });
+
+        window.__robotCameraObserverV1 = observer;
+    }
+})();
+</script>
+"""
+
 # ============================================================
 # GRÁFICO
 # ============================================================
@@ -2585,22 +2709,14 @@ else:
         )
 
         # Cena 3D nativa do Streamlit/Plotly.
-        # Na primeira criação enviamos a câmera inicial. Depois disso,
-        # NÃO reenviamos o atributo scene.camera nos reruns. Isso é
-        # importante porque o Plotly preserva a câmera do usuário com
-        # uirevision quando a nova Figure não fornece uma câmera diferente.
-        if not st.session_state.get("robot_scene_has_rendered", False):
-            scene_fig.update_layout(
-                scene_camera=dict(
-                    projection=dict(type="orthographic"),
-                    eye=dict(
-                        x=1.55,
-                        y=1.55,
-                        z=1.15,
-                    ),
-                )
-            )
-
+        # Mantemos a mesma Figure/mesmos traces da versão visual boa.
+        # O uirevision="fixed_scene" da Figure preserva a câmera durante
+        # os reruns causados pelos number_input das juntas.
+        #
+        # IMPORTANTE: não usamos st.html + JavaScript para a cena estática
+        # e não fazemos Plotly.react/redraw/nudge. Assim evitamos a condição
+        # de corrida do primeiro render e não interferimos na animação, que
+        # continua usando o componente HTML separado e Plotly.restyle().
         st.plotly_chart(
             scene_fig,
             width="stretch",
@@ -2616,9 +2732,13 @@ else:
             key="robot_3d_scene",
         )
 
-        # A partir daqui, os reruns causados pelas juntas não devem
-        # reenviar uma câmera padrão ao Plotly.
-        st.session_state.robot_scene_has_rendered = True
+        # Captura/restaura somente a câmera do gráfico nativo.
+        # Não altera traces, geometria, animação ou a forma de renderização.
+        st.html(
+            camera_persistence_html(),
+            width="content",
+            unsafe_allow_javascript=True,
+        )
 
         col1, col2, col3, col4 = st.columns(4)
 
