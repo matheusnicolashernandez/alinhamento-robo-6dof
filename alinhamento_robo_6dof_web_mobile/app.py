@@ -35,6 +35,7 @@ DEFAULTS = {
     "tube_x": 0.0,
     "tube_y": 0.0,
     "tube_z": -500.0,
+    # Pequeno deslocamento inicial solicitado para forçar a atualização visual.
     "base_x": 0.0,
     "base_y": -500.0,
     "base_z": -2054.0,
@@ -2001,111 +2002,126 @@ Plotly.newPlot(
 
 
 def make_static_camera_html_v32(fig, height=620):
-    """
-    Cena estática usando EXATAMENTE a mesma estratégia de carregamento
-    usada pela animação: documento HTML completo + Plotly carregado no
-    <head>. Isso elimina a corrida entre st.html e window.Plotly.
-
-    A câmera é persistida em localStorage e reaplicada após cada rerun.
-    Nenhum Plotly.react(), rerun automático ou atualização de traces é feito.
-    """
+    """Cena inicial no DOM principal do Streamlit, preservando a câmera."""
     fig_json = fig.to_json()
     camera_key = "robot_scene_camera_v32"
 
     html = f"""
-<!DOCTYPE html>
-<html>
-<head>
-<meta charset="utf-8">
-<script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
-<style>
-html, body {{
-    margin: 0;
-    padding: 0;
-    background: white;
-    width: 100%;
-    height: 100%;
-    overflow: hidden;
-}}
-#plot {{
-    width: 100%;
-    height: 100%;
-}}
-</style>
-</head>
-<body>
-<div id="plot"></div>
+<div id="robot-scene-v32" style="width:100%;height:{int(height)}px;background:#ffffff;overflow:hidden;"></div>
 <script>
-const FIG = {fig_json};
-const gd = document.getElementById("plot");
-const CAMERA_KEY = "{camera_key}";
+(function() {{
+    const container = document.getElementById("robot-scene-v32");
+    if (!container) return;
 
-function getSavedCamera() {{
-    try {{
-        const raw = window.localStorage.getItem(CAMERA_KEY);
-        return raw ? JSON.parse(raw) : null;
-    }} catch (e) {{
-        return null;
-    }}
-}}
+    const CAMERA_KEY = "{camera_key}";
+    const FIG = {fig_json};
 
-function saveCamera() {{
-    try {{
-        const camera = gd && gd.layout && gd.layout.scene && gd.layout.scene.camera;
-        if (camera) {{
-            window.localStorage.setItem(
-                CAMERA_KEY,
-                JSON.stringify(camera)
-            );
+    function getSavedCamera() {{
+        try {{
+            const raw = window.localStorage.getItem(CAMERA_KEY);
+            return raw ? JSON.parse(raw) : null;
+        }} catch (e) {{
+            return null;
         }}
-    }} catch (e) {{}}
-}}
-
-const savedCamera = getSavedCamera();
-if (savedCamera) {{
-    FIG.layout = FIG.layout || {{}};
-    FIG.layout.scene = FIG.layout.scene || {{}};
-    FIG.layout.scene.camera = savedCamera;
-}}
-
-Plotly.newPlot(
-    gd,
-    FIG.data,
-    FIG.layout,
-    {{
-        responsive: true,
-        displaylogo: false,
-        scrollZoom: true,
-        displayModeBar: true,
-        modeBarButtonsToAdd: [
-            "resetCameraDefault",
-            "resetCameraLastSave"
-        ]
     }}
-).then(function() {{
-    gd.on("plotly_relayout", function(evt) {{
-        if (!evt) return;
-        const keys = Object.keys(evt);
-        if (keys.some(function(k) {{
-            return k === "scene.camera" || k.startsWith("scene.camera.");
-        }})) {{
-            saveCamera();
+
+    function saveCamera(gd) {{
+        try {{
+            const camera = gd && gd.layout && gd.layout.scene && gd.layout.scene.camera;
+            if (camera) window.localStorage.setItem(CAMERA_KEY, JSON.stringify(camera));
+        }} catch (e) {{}}
+    }}
+
+    function render() {{
+        if (!window.Plotly) return;
+
+        const savedCamera = getSavedCamera();
+        if (savedCamera) {{
+            FIG.layout = FIG.layout || {{}};
+            FIG.layout.scene = FIG.layout.scene || {{}};
+            FIG.layout.scene.camera = savedCamera;
         }}
-    }});
 
-    gd.addEventListener("mouseup", function() {{
-        setTimeout(saveCamera, 0);
-    }});
+        Plotly.newPlot(
+            container,
+            FIG.data,
+            FIG.layout,
+            {{
+                responsive: true,
+                displaylogo: false,
+                scrollZoom: true,
+                displayModeBar: true,
+                modeBarButtonsToAdd: [
+                    "resetCameraDefault",
+                    "resetCameraLastSave"
+                ]
+            }}
+        ).then(function(gd) {{
+            gd.on("plotly_relayout", function(evt) {{
+                if (!evt) return;
+                const keys = Object.keys(evt);
+                if (keys.some(k => k === "scene.camera" || k.startsWith("scene.camera."))) {{
+                    saveCamera(gd);
+                }}
+            }});
 
-    gd.addEventListener("touchend", function() {{
-        setTimeout(saveCamera, 0);
-    }}, {{passive: true}});
+            gd.addEventListener("mouseup", function() {{
+                setTimeout(function() {{ saveCamera(gd); }}, 0);
+            }});
+            gd.addEventListener("touchend", function() {{
+                setTimeout(function() {{ saveCamera(gd); }}, 0);
+            }}, {{passive:true}});
 
-    saveCamera();
-}});
+            saveCamera(gd);
+
+            // Nudge real da BASE depois que o gráfico já terminou de montar.
+            // Fazemos duas atualizações separadas e um redraw entre elas:
+            // BASE X +1 mm -> redraw -> BASE X original.
+            setTimeout(async function() {{
+                try {{
+                    const baseIndex = 2;
+                    const baseTrace = gd.data[baseIndex];
+                    if (!baseTrace || !baseTrace.x) return;
+
+                    const originalX = JSON.parse(JSON.stringify(baseTrace.x));
+                    const nudgedX = originalX.map(function(row) {{
+                        if (Array.isArray(row)) {{
+                            return row.map(function(v) {{
+                                return typeof v === "number" ? v + 1.0 : v;
+                            }});
+                        }}
+                        return typeof row === "number" ? row + 1.0 : row;
+                    }});
+
+                    await Plotly.restyle(gd, {{x: [nudgedX]}}, [baseIndex]);
+                    await new Promise(function(resolve) {{
+                        requestAnimationFrame(function() {{
+                            requestAnimationFrame(resolve);
+                        }});
+                    }});
+                    await Plotly.redraw(gd);
+                    await new Promise(function(resolve) {{
+                        setTimeout(resolve, 80);
+                    }});
+                    await Plotly.restyle(gd, {{x: [originalX]}}, [baseIndex]);
+                    await Plotly.redraw(gd);
+                }} catch (e) {{
+                    console.warn("Nudge inicial da base não aplicado:", e);
+                }}
+            }}, 500);
+        }});
+    }}
+
+    if (window.Plotly) {{
+        render();
+    }} else {{
+        const script = document.createElement("script");
+        script.src = "https://cdn.plot.ly/plotly-latest.min.js";
+        script.onload = render;
+        document.head.appendChild(script);
+    }}
+}})();
 </script>
-</body>
-</html>
 """
     return html
 
@@ -2221,16 +2237,30 @@ st.caption(
 
 with st.sidebar:
 
-    # Botão principal permanece no topo da barra lateral.
-    st.markdown("""
-    <style>
-    div.stButton > button[kind="primary"] {
-        background-color: #2E7D32 !important;
-        border-color: #2E7D32 !important;
-        color: white !important;
-    }
-    </style>
-    """, unsafe_allow_html=True)
+    # Botão principal no topo da barra lateral.
+    # Mantém o comportamento de botão primário, mas com aparência verde.
+    st.markdown(
+        """
+        <style>
+        div.stButton > button[kind="primary"] {
+            background-color: #2E7D32 !important;
+            border-color: #2E7D32 !important;
+            color: white !important;
+        }
+        div.stButton > button[kind="primary"]:hover {
+            background-color: #1B5E20 !important;
+            border-color: #1B5E20 !important;
+            color: white !important;
+        }
+        div.stButton > button[kind="primary"]:focus:not(:active) {
+            color: white !important;
+            border-color: #2E7D32 !important;
+            box-shadow: 0 0 0 0.1rem rgba(46,125,50,0.25) !important;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
 
     align_clicked = st.button(
         "▶ ALINHAR AUTOMATICAMENTE",
@@ -2372,9 +2402,9 @@ with st.sidebar:
         np.asarray(q_deg, dtype=float)
     )
 
-    # Atualização automática das juntas: alterar qualquer number_input
-    # já provoca o rerun normal do Streamlit e a nova pose é aplicada
-    # antes da reconstrução da cena. Não há botão "Aplicar juntas".
+    # Atualiza a pose somente quando os valores dos widgets realmente mudam.
+    # Não usamos callback: alterar um number_input já faz o Streamlit executar
+    # novamente o script, e a pose é então atualizada aqui antes da cena 3D.
     previous_manual_q = st.session_state.get("manual_q_snapshot")
     joints_changed = (
         previous_manual_q is not None
@@ -2448,7 +2478,7 @@ if align_clicked:
     if can_replay:
         q0 = np.asarray(previous_states[0], dtype=float).copy()
     else:
-        q0 = st.session_state.q.copy()
+        q0 = manual_q.copy()
 
     with st.spinner("Calculando trajetória de alinhamento..."):
         states, result = solve_trajectory(
@@ -2529,12 +2559,18 @@ if (
         config={"displaylogo": False},
     )
 
+    st.caption(
+        "A animação é reproduzida no navegador. "
+        "O tubo e a base permanecem estáticos; apenas os elementos móveis "
+        "são atualizados durante o movimento."
+    )
 
 else:
 
 
 
-        q = st.session_state.q
+        # A cena normal usa diretamente os valores atuais dos campos q1...q6.
+        q = manual_q
 
         d, angle, max_dist_error = current_metrics(
             robot,
@@ -2550,10 +2586,10 @@ else:
             lasers,
         )
 
-        components.html(
+        st.html(
             make_static_camera_html_v32(scene_fig, height=620),
-            height=620,
-            scrolling=False,
+            width="stretch",
+            unsafe_allow_javascript=True,
         )
 
         col1, col2, col3, col4 = st.columns(4)
