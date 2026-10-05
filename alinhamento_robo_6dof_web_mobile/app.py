@@ -2243,6 +2243,34 @@ def camera_persistence_html():
 """
 
 # ============================================================
+# ATUALIZAÇÃO DA POSE NO NAVEGADOR — SEM RERUN
+# ============================================================
+
+def make_live_joint_updater_html():
+    return r'''<script>
+(function () {
+const L=["q1 (°)","q2 (°)","q3 (°)","q4 (°)","q5 (°)","q6 (°)"];
+const O=[[0,0,0],[0,0,250],[0,0,550],[0,0,300],[0,0,250],[0,0,250]];
+const A=[[0,0,1],[1,0,0],[1,0,0],[0,0,1],[1,0,0],[0,0,1]];
+const B=[0,-500,-2054],W=670,H=130,R=250;
+function add(a,b){return[a[0]+b[0],a[1]+b[1],a[2]+b[2]]}
+function sub(a,b){return[a[0]-b[0],a[1]-b[1],a[2]-b[2]]}
+function sc(a,s){return[a[0]*s,a[1]*s,a[2]*s]}
+function cr(a,b){return[a[1]*b[2]-a[2]*b[1],a[2]*b[0]-a[0]*b[2],a[0]*b[1]-a[1]*b[0]]}
+function un(a){let n=Math.hypot(...a)||1;return sc(a,1/n)}
+function mm(a,b){let c=[[0,0,0],[0,0,0],[0,0,0]];for(let i=0;i<3;i++)for(let j=0;j<3;j++)for(let k=0;k<3;k++)c[i][j]+=a[i][k]*b[k][j];return c}
+function mv(a,v){return[a[0][0]*v[0]+a[0][1]*v[1]+a[0][2]*v[2],a[1][0]*v[0]+a[1][1]*v[1]+a[1][2]*v[2],a[2][0]*v[0]+a[2][1]*v[1]+a[2][2]*v[2]]}
+function rot(a,t){let[x,y,z]=un(a),c=Math.cos(t),s=Math.sin(t),C=1-c;return[[c+x*x*C,x*y*C-z*s,x*z*C+y*s],[y*x*C+z*s,c+y*y*C,y*z*C-x*s],[z*x*C-y*s,z*y*C+x*s,c+z*z*C]]}
+function inputs(){return L.map(x=>{let e=document.querySelector('input[aria-label="'+x+'"]');return e?parseFloat(e.value):NaN})}
+function fk(q){let r=rot([0,0,1],Math.PI/2),p=B.slice(),j=[];for(let i=0;i<6;i++){if(i)p=add(p,mv(r,O[i]));r=mm(r,rot(A[i],q[i]*Math.PI/180));j.push({p:p.slice(),r:r.map(x=>x.slice())})}return j}
+function hit(p,d){let px=p[0],py=p[1],a=d[0]*d[0]+d[1]*d[1];if(a<1e-12)return null;let b=2*(px*d[0]+py*d[1]),c=px*px+py*py-R*R,disc=b*b-4*a*c;if(disc<0)return null;let rt=Math.sqrt(disc),t=[(-b-rt)/(2*a),(-b+rt)/(2*a)].filter(x=>x>=0);return t.length?add(p,sc(d,Math.min(...t))):null}
+function update(g){let q=inputs();if(q.some(Number.isNaN))return;let T=fk(q),P=T.map(x=>x.p),e=T[5],c=e.p,ex=[e.r[0][0],e.r[1][0],e.r[2][0]],ey=[e.r[0][1],e.r[1][1],e.r[2][1]],ez=[e.r[0][2],e.r[1][2],e.r[2][2]],wa=sc(ex,-1);let S={A:sub(sub(c,sc(wa,W/2)),sc(ey,H/2)),B:add(sub(c,sc(ey,H/2)),sc(wa,W/2)),C:add(sub(c,sc(wa,W/2)),sc(ey,H/2)),D:add(add(c,sc(wa,W/2)),sc(ey,H/2))};let C=[S.A,S.B,S.D,S.C,S.A],n=un(cr(wa,ey)),x=[],y=[],z=[];for(let i=0;i<5;i++){x.push([P[i][0],P[i+1][0]]);y.push([P[i][1],P[i+1][1]]);z.push([P[i][2],P[i+1][2]])}x.push(P.map(p=>p[0]));y.push(P.map(p=>p[1]));z.push(P.map(p=>p[2]));x.push(C.map(p=>p[0]));y.push(C.map(p=>p[1]));z.push(C.map(p=>p[2]));x.push([c[0]]);y.push([c[1]]);z.push([c[2]]);x.push([c[0],c[0]+ez[0]*130]);y.push([c[1],c[1]+ez[1]*130]);z.push([c[2],c[2]+ez[2]*130]);for(let k of ["A","B","C","D"]){let p=S[k],d=n.slice(),rad=[p[0],p[1],0];if(d[0]*(-rad[0])+d[1]*(-rad[1])<0)d=sc(d,-1);let h=hit(p,d);x.push([p[0]]);y.push([p[1]]);z.push([p[2]]);x.push(h?[p[0],h[0]]:[null,null]);y.push(h?[p[1],h[1]]:[null,null]);z.push(h?[p[2],h[2]]:[null,null]);x.push(h?[h[0]]:[null]);y.push(h?[h[1]]:[null]);z.push(h?[h[2]]:[null])}let ids=Array.from({length:21},(_,i)=>i+3);Plotly.restyle(g,{x:x,y:y,z:z},ids)}
+function install(){let g=document.querySelector('.st-key-robot_3d_scene .js-plotly-plot')||document.querySelector('.js-plotly-plot');if(!g||g.__liveJoint)return false;g.__liveJoint=true;let h=()=>requestAnimationFrame(()=>update(g));L.forEach(x=>{let e=document.querySelector('input[aria-label="'+x+'"]');if(e){e.addEventListener('input',h);e.addEventListener('change',h)}});update(g);return true}
+let n=0,t=setInterval(()=>{if(install()||++n>100)clearInterval(t)},100);
+})();
+</script>'''
+
+# ============================================================
 # GRÁFICO
 # ============================================================
 
@@ -2516,6 +2544,7 @@ with st.sidebar:
             ),
             step=1.0,
             key=f"q_deg_{i}",
+            on_change="ignore",
         )
 
         q_deg.append(value)
@@ -2524,28 +2553,7 @@ with st.sidebar:
         np.asarray(q_deg, dtype=float)
     )
 
-    # Atualiza a pose somente quando os valores dos widgets realmente mudam.
-    # Não usamos callback: alterar um number_input já faz o Streamlit executar
-    # novamente o script, e a pose é então atualizada aqui antes da cena 3D.
-    previous_manual_q = st.session_state.get("manual_q_snapshot")
-    joints_changed = (
-        previous_manual_q is not None
-        and not np.allclose(
-            manual_q,
-            np.asarray(previous_manual_q, dtype=float),
-            rtol=0.0,
-            atol=1e-12,
-        )
-    )
-
-    if joints_changed:
-        st.session_state.q = manual_q.copy()
-        st.session_state.trajectory = None
-        st.session_state.trajectory_cfg = None
-        st.session_state.last_result = None
-        st.session_state.status = "Pose manual atualizada"
-
-    st.session_state.manual_q_snapshot = manual_q.copy()
+    # As juntas são atualizadas diretamente no navegador; não há rerun.
 
     if st.button(
         "↺ Resetar pose",
@@ -2731,6 +2739,8 @@ else:
             },
             key="robot_3d_scene",
         )
+
+        st.html(make_live_joint_updater_html(), unsafe_allow_javascript=True)
 
         # Captura/restaura somente a câmera do gráfico nativo.
         # Não altera traces, geometria, animação ou a forma de renderização.
