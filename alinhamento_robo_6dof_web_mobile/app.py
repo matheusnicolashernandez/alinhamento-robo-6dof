@@ -35,6 +35,7 @@ DEFAULTS = {
     "tube_x": 0.0,
     "tube_y": 0.0,
     "tube_z": -500.0,
+    # Pequeno deslocamento inicial solicitado para forçar a atualização visual.
     "base_x": 0.0,
     "base_y": -500.0,
     "base_z": -2054.0,
@@ -2072,6 +2073,42 @@ def make_static_camera_html_v32(fig, height=620):
             }}, {{passive:true}});
 
             saveCamera(gd);
+
+            // Nudge real da BASE depois que o gráfico já terminou de montar.
+            // Fazemos duas atualizações separadas e um redraw entre elas:
+            // BASE X +1 mm -> redraw -> BASE X original.
+            setTimeout(async function() {{
+                try {{
+                    const baseIndex = 2;
+                    const baseTrace = gd.data[baseIndex];
+                    if (!baseTrace || !baseTrace.x) return;
+
+                    const originalX = JSON.parse(JSON.stringify(baseTrace.x));
+                    const nudgedX = originalX.map(function(row) {{
+                        if (Array.isArray(row)) {{
+                            return row.map(function(v) {{
+                                return typeof v === "number" ? v + 1.0 : v;
+                            }});
+                        }}
+                        return typeof row === "number" ? row + 1.0 : row;
+                    }});
+
+                    await Plotly.restyle(gd, {{x: [nudgedX]}}, [baseIndex]);
+                    await new Promise(function(resolve) {{
+                        requestAnimationFrame(function() {{
+                            requestAnimationFrame(resolve);
+                        }});
+                    }});
+                    await Plotly.redraw(gd);
+                    await new Promise(function(resolve) {{
+                        setTimeout(resolve, 80);
+                    }});
+                    await Plotly.restyle(gd, {{x: [originalX]}}, [baseIndex]);
+                    await Plotly.redraw(gd);
+                }} catch (e) {{
+                    console.warn("Nudge inicial da base não aplicado:", e);
+                }}
+            }}, 500);
         }});
     }}
 
@@ -2189,12 +2226,49 @@ lasers = FourLasers(robot)
 initialize_state(robot)
 
 st.title("Alinhamento automático — Robô 6 DOF + 4 lasers")
+st.caption(
+    "Versão web para celular/tablet. "
+    "O cálculo continua baseado no normal.urdf."
+)
 
 # ------------------------------------------------------------
 # SIDEBAR
 # ------------------------------------------------------------
 
 with st.sidebar:
+
+    # Botão principal no topo da barra lateral.
+    # Mantém o comportamento de botão primário, mas com aparência verde.
+    st.markdown(
+        """
+        <style>
+        div.stButton > button[kind="primary"] {
+            background-color: #2E7D32 !important;
+            border-color: #2E7D32 !important;
+            color: white !important;
+        }
+        div.stButton > button[kind="primary"]:hover {
+            background-color: #1B5E20 !important;
+            border-color: #1B5E20 !important;
+            color: white !important;
+        }
+        div.stButton > button[kind="primary"]:focus:not(:active) {
+            color: white !important;
+            border-color: #2E7D32 !important;
+            box-shadow: 0 0 0 0.1rem rgba(46,125,50,0.25) !important;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    align_clicked = st.button(
+        "▶ ALINHAR AUTOMATICAMENTE",
+        use_container_width=True,
+        type="primary",
+    )
+
+    st.divider()
 
     st.header("Configuração")
 
@@ -2328,22 +2402,39 @@ with st.sidebar:
         np.asarray(q_deg, dtype=float)
     )
 
-    if st.button(
-        "Aplicar juntas",
-        use_container_width=True,
-    ):
-        st.session_state.q = manual_q
+    # Atualiza a pose somente quando os valores dos widgets realmente mudam.
+    # Não usamos callback: alterar um number_input já faz o Streamlit executar
+    # novamente o script, e a pose é então atualizada aqui antes da cena 3D.
+    previous_manual_q = st.session_state.get("manual_q_snapshot")
+    joints_changed = (
+        previous_manual_q is not None
+        and not np.allclose(
+            manual_q,
+            np.asarray(previous_manual_q, dtype=float),
+            rtol=0.0,
+            atol=1e-12,
+        )
+    )
+
+    if joints_changed:
+        st.session_state.q = manual_q.copy()
         st.session_state.trajectory = None
         st.session_state.trajectory_cfg = None
         st.session_state.last_result = None
-        st.session_state.status = "Pose manual aplicada"
-        st.rerun()
+        st.session_state.status = "Pose manual atualizada"
+
+    st.session_state.manual_q_snapshot = manual_q.copy()
 
     if st.button(
         "↺ Resetar pose",
         use_container_width=True,
     ):
         st.session_state.q = np.radians(
+            INITIAL_Q_DEG.copy()
+        )
+        for i in range(6):
+            st.session_state[f"q_deg_{i}"] = float(INITIAL_Q_DEG[i])
+        st.session_state.manual_q_snapshot = np.radians(
             INITIAL_Q_DEG.copy()
         )
         reset_history()
@@ -2354,12 +2445,6 @@ with st.sidebar:
         st.rerun()
 
     st.divider()
-
-    align_clicked = st.button(
-        "▶ ALINHAR AUTOMATICAMENTE",
-        use_container_width=True,
-        type="primary",
-    )
 
     stop_clicked = st.button(
         "■ PARAR",
@@ -2393,7 +2478,7 @@ if align_clicked:
     if can_replay:
         q0 = np.asarray(previous_states[0], dtype=float).copy()
     else:
-        q0 = st.session_state.q.copy()
+        q0 = manual_q.copy()
 
     with st.spinner("Calculando trajetória de alinhamento..."):
         states, result = solve_trajectory(
@@ -2484,7 +2569,8 @@ else:
 
 
 
-        q = st.session_state.q
+        # A cena normal usa diretamente os valores atuais dos campos q1...q6.
+        q = manual_q
 
         d, angle, max_dist_error = current_metrics(
             robot,
@@ -2500,10 +2586,10 @@ else:
             lasers,
         )
 
-        components.html(
+        st.html(
             make_static_camera_html_v32(scene_fig, height=620),
-            height=620,
-            scrolling=False,
+            width="stretch",
+            unsafe_allow_javascript=True,
         )
 
         col1, col2, col3, col4 = st.columns(4)
