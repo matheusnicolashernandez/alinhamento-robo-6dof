@@ -1059,14 +1059,7 @@ def make_scene_figure(q, cfg, robot, lasers):
             ),
             aspectmode="data",
             dragmode="orbit",
-            camera=dict(
-                projection=dict(type="orthographic"),
-                eye=dict(
-                    x=1.55,
-                    y=1.55,
-                    z=1.15,
-                ),
-            ),
+            uirevision="robot_camera",
         ),
         showlegend=False,
     )
@@ -2592,14 +2585,22 @@ else:
         )
 
         # Cena 3D nativa do Streamlit/Plotly.
-        # Mantemos a mesma Figure/mesmos traces da versão visual boa.
-        # O uirevision="fixed_scene" da Figure preserva a câmera durante
-        # os reruns causados pelos number_input das juntas.
-        #
-        # IMPORTANTE: não usamos st.html + JavaScript para a cena estática
-        # e não fazemos Plotly.react/redraw/nudge. Assim evitamos a condição
-        # de corrida do primeiro render e não interferimos na animação, que
-        # continua usando o componente HTML separado e Plotly.restyle().
+        # Na primeira criação enviamos a câmera inicial. Depois disso,
+        # NÃO reenviamos o atributo scene.camera nos reruns. Isso é
+        # importante porque o Plotly preserva a câmera do usuário com
+        # uirevision quando a nova Figure não fornece uma câmera diferente.
+        if not st.session_state.get("robot_scene_has_rendered", False):
+            scene_fig.update_layout(
+                scene_camera=dict(
+                    projection=dict(type="orthographic"),
+                    eye=dict(
+                        x=1.55,
+                        y=1.55,
+                        z=1.15,
+                    ),
+                )
+            )
+
         st.plotly_chart(
             scene_fig,
             width="stretch",
@@ -2614,6 +2615,10 @@ else:
             },
             key="robot_3d_scene",
         )
+
+        # A partir daqui, os reruns causados pelas juntas não devem
+        # reenviar uma câmera padrão ao Plotly.
+        st.session_state.robot_scene_has_rendered = True
 
         col1, col2, col3, col4 = st.columns(4)
 
