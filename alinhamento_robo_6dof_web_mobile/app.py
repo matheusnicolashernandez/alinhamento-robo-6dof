@@ -2109,49 +2109,6 @@ def make_static_camera_html_v32(fig, height=620):
                         try {{
                             Plotly.Plots.resize(gd);
                         }} catch (e) {{}}
-
-                        // Força uma atualização real do trace da base e volta
-                        // imediatamente. Isso substitui o antigo nudge que
-                        // alterava apenas o objeto FIG, e não o gráfico criado.
-                        setTimeout(function() {{
-                            try {{
-                                const baseTrace = gd.data[2];
-                                if (!baseTrace || !baseTrace.x) return;
-
-                                const originalX = JSON.parse(JSON.stringify(baseTrace.x));
-                                const originalY = JSON.parse(JSON.stringify(baseTrace.y));
-                                const originalZ = JSON.parse(JSON.stringify(baseTrace.z));
-
-                                const nudgedX = originalX.map(function(row) {{
-                                    if (Array.isArray(row)) {{
-                                        return row.map(function(v) {{
-                                            return typeof v === "number" ? v + 1.0 : v;
-                                        }});
-                                    }}
-                                    return typeof row === "number" ? row + 1.0 : row;
-                                }});
-
-                                Plotly.restyle(gd, {{
-                                    x: [nudgedX],
-                                    y: [originalY],
-                                    z: [originalZ]
-                                }}, [2]).then(function() {{
-                                    return new Promise(function(resolve) {{
-                                        requestAnimationFrame(function() {{
-                                            requestAnimationFrame(resolve);
-                                        }});
-                                    }});
-                                }}).then(function() {{
-                                    return Plotly.restyle(gd, {{
-                                        x: [originalX],
-                                        y: [originalY],
-                                        z: [originalZ]
-                                    }}, [2]);
-                                }});
-                            }} catch (e) {{
-                                console.warn("Atualização inicial da cena não aplicada:", e);
-                            }}
-                        }}, 120);
                     }});
                 }});
 
@@ -2164,18 +2121,23 @@ def make_static_camera_html_v32(fig, height=620):
                     observer.observe(container);
                 }}
 
-                // Em alguns navegadores o WebGL cria o canvas corretamente,
-                // mas Mesh3d/Surface não aparecem na primeira pintura.
-                // Um segundo react, já com o container estabilizado, força
-                // exatamente a reconstrução que hoje ocorre quando o usuário
-                // altera qualquer configuração no Streamlit.
+                // Correção SOMENTE no primeiro carregamento da página.
+                // O segundo react resolve o problema inicial de Mesh3d/Surface,
+                // mas fazê-lo em todo rerun (cada mudança de junta) causa
+                // piscadas. sessionStorage sobrevive aos reruns do Streamlit,
+                // mas é zerado quando a aba é recarregada.
                 setTimeout(function() {{
                     try {{
+                        const INIT_KEY = "robot_scene_initial_fix_v46";
+                        if (window.sessionStorage.getItem(INIT_KEY) === "1") {{
+                            return;
+                        }}
+
                         const camera = gd.layout && gd.layout.scene
                             ? JSON.parse(JSON.stringify(gd.layout.scene.camera))
                             : null;
 
-                        return Plotly.react(
+                        Plotly.react(
                             gd,
                             FIG.data,
                             FIG.layout,
@@ -2195,11 +2157,15 @@ def make_static_camera_html_v32(fig, height=620):
                                     "scene.camera": camera
                                 }});
                             }}
+                        }}).then(function() {{
+                            window.sessionStorage.setItem(INIT_KEY, "1");
+                        }}).catch(function(e) {{
+                            console.warn("Correção inicial da cena não aplicada:", e);
                         }});
                     }} catch (e) {{
-                        console.warn("Reconstrução inicial da cena não aplicada:", e);
+                        console.warn("Correção inicial da cena não aplicada:", e);
                     }}
-                }}, 700);
+                }}, 250);
 
                 saveCamera(gd);
             }});
