@@ -2189,11 +2189,35 @@ lasers = FourLasers(robot)
 initialize_state(robot)
 
 st.title("Alinhamento automático — Robô 6 DOF + 4 lasers")
+st.caption(
+    "Versão web para celular/tablet. "
+    "O cálculo continua baseado no normal.urdf."
+)
+
 # ------------------------------------------------------------
 # SIDEBAR
 # ------------------------------------------------------------
 
 with st.sidebar:
+
+    # Botão principal permanece no topo da barra lateral.
+    st.markdown("""
+    <style>
+    div.stButton > button[kind="primary"] {
+        background-color: #2E7D32 !important;
+        border-color: #2E7D32 !important;
+        color: white !important;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+
+    align_clicked = st.button(
+        "▶ ALINHAR AUTOMATICAMENTE",
+        use_container_width=True,
+        type="primary",
+    )
+
+    st.divider()
 
     st.header("Configuração")
 
@@ -2327,22 +2351,39 @@ with st.sidebar:
         np.asarray(q_deg, dtype=float)
     )
 
-    if st.button(
-        "Aplicar juntas",
-        use_container_width=True,
-    ):
-        st.session_state.q = manual_q
+    # Atualização automática das juntas: alterar qualquer number_input
+    # já provoca o rerun normal do Streamlit e a nova pose é aplicada
+    # antes da reconstrução da cena. Não há botão "Aplicar juntas".
+    previous_manual_q = st.session_state.get("manual_q_snapshot")
+    joints_changed = (
+        previous_manual_q is not None
+        and not np.allclose(
+            manual_q,
+            np.asarray(previous_manual_q, dtype=float),
+            rtol=0.0,
+            atol=1e-12,
+        )
+    )
+
+    if joints_changed:
+        st.session_state.q = manual_q.copy()
         st.session_state.trajectory = None
         st.session_state.trajectory_cfg = None
         st.session_state.last_result = None
-        st.session_state.status = "Pose manual aplicada"
-        st.rerun()
+        st.session_state.status = "Pose manual atualizada"
+
+    st.session_state.manual_q_snapshot = manual_q.copy()
 
     if st.button(
         "↺ Resetar pose",
         use_container_width=True,
     ):
         st.session_state.q = np.radians(
+            INITIAL_Q_DEG.copy()
+        )
+        for i in range(6):
+            st.session_state[f"q_deg_{i}"] = float(INITIAL_Q_DEG[i])
+        st.session_state.manual_q_snapshot = np.radians(
             INITIAL_Q_DEG.copy()
         )
         reset_history()
@@ -2353,12 +2394,6 @@ with st.sidebar:
         st.rerun()
 
     st.divider()
-
-    align_clicked = st.button(
-        "▶ ALINHAR AUTOMATICAMENTE",
-        use_container_width=True,
-        type="primary",
-    )
 
     stop_clicked = st.button(
         "■ PARAR",
@@ -2473,11 +2508,6 @@ if (
         config={"displaylogo": False},
     )
 
-    st.caption(
-        "A animação é reproduzida no navegador. "
-        "O tubo e a base permanecem estáticos; apenas os elementos móveis "
-        "são atualizados durante o movimento."
-    )
 
 else:
 
@@ -2499,19 +2529,10 @@ else:
             lasers,
         )
 
-        # Cena estática: usar o Plotly nativo do Streamlit.
-        # A animação continua separada em components.html(), portanto
-        # não há reconstrução/React/JS interferindo no movimento.
-        st.plotly_chart(
-            scene_fig,
+        st.html(
+            make_static_camera_html_v32(scene_fig, height=620),
             width="stretch",
-            config={
-                "responsive": True,
-                "displaylogo": False,
-                "scrollZoom": True,
-                "displayModeBar": True,
-            },
-            key="robot_static_scene",
+            unsafe_allow_javascript=True,
         )
 
         col1, col2, col3, col4 = st.columns(4)
