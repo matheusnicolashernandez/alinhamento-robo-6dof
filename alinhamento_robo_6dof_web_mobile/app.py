@@ -2164,6 +2164,43 @@ def make_static_camera_html_v32(fig, height=620):
                     observer.observe(container);
                 }}
 
+                // Em alguns navegadores o WebGL cria o canvas corretamente,
+                // mas Mesh3d/Surface não aparecem na primeira pintura.
+                // Um segundo react, já com o container estabilizado, força
+                // exatamente a reconstrução que hoje ocorre quando o usuário
+                // altera qualquer configuração no Streamlit.
+                setTimeout(function() {{
+                    try {{
+                        const camera = gd.layout && gd.layout.scene
+                            ? JSON.parse(JSON.stringify(gd.layout.scene.camera))
+                            : null;
+
+                        return Plotly.react(
+                            gd,
+                            FIG.data,
+                            FIG.layout,
+                            {{
+                                responsive: true,
+                                displaylogo: false,
+                                scrollZoom: true,
+                                displayModeBar: true,
+                                modeBarButtonsToAdd: [
+                                    "resetCameraDefault",
+                                    "resetCameraLastSave"
+                                ]
+                            }}
+                        ).then(function() {{
+                            if (camera) {{
+                                return Plotly.relayout(gd, {{
+                                    "scene.camera": camera
+                                }});
+                            }}
+                        }});
+                    }} catch (e) {{
+                        console.warn("Reconstrução inicial da cena não aplicada:", e);
+                    }}
+                }}, 700);
+
                 saveCamera(gd);
             }});
         }});
