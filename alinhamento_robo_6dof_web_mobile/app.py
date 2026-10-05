@@ -2002,132 +2002,79 @@ Plotly.newPlot(
 
 
 def make_static_camera_html_v32(fig, height=620):
-    """Cena inicial no DOM principal do Streamlit, preservando a câmera."""
-    fig_json = fig.to_json()
+    """Cena inicial com Plotly embutido, preservando a câmera."""
     camera_key = "robot_scene_camera_v32"
 
+    plot_html = fig.to_html(
+        full_html=False,
+        include_plotlyjs=True,
+        config={
+            "responsive": True,
+            "displaylogo": False,
+            "scrollZoom": True,
+            "displayModeBar": True,
+            "modeBarButtonsToAdd": [
+                "resetCameraDefault",
+                "resetCameraLastSave",
+            ],
+        },
+        default_width="100%",
+        default_height=f"{int(height)}px",
+    )
+
     html = f"""
-<div id="robot-scene-v32" style="width:100%;height:{int(height)}px;background:#ffffff;overflow:hidden;"></div>
+<div id="robot-scene-v50" style="width:100%;height:{int(height)}px;background:#ffffff;overflow:hidden;">
+{plot_html}
+</div>
 <script>
 (function() {{
-    const container = document.getElementById("robot-scene-v32");
-    if (!container) return;
-
+    const root = document.getElementById("robot-scene-v50");
+    if (!root) return;
     const CAMERA_KEY = "{camera_key}";
-    const FIG = {fig_json};
-
-    function getSavedCamera() {{
-        try {{
-            const raw = window.localStorage.getItem(CAMERA_KEY);
-            return raw ? JSON.parse(raw) : null;
-        }} catch (e) {{
-            return null;
-        }}
-    }}
 
     function saveCamera(gd) {{
         try {{
-            const camera = gd && gd.layout && gd.layout.scene && gd.layout.scene.camera;
-            if (camera) window.localStorage.setItem(CAMERA_KEY, JSON.stringify(camera));
+            const c = gd && gd.layout && gd.layout.scene && gd.layout.scene.camera;
+            if (c) localStorage.setItem(CAMERA_KEY, JSON.stringify(c));
         }} catch (e) {{}}
     }}
 
-    function render() {{
-        if (!window.Plotly) return;
-
-        const savedCamera = getSavedCamera();
-        if (savedCamera) {{
-            FIG.layout = FIG.layout || {{}};
-            FIG.layout.scene = FIG.layout.scene || {{}};
-            FIG.layout.scene.camera = savedCamera;
+    function attach() {{
+        const gd = root.querySelector('.js-plotly-plot');
+        if (!gd || !window.Plotly) {{
+            setTimeout(attach, 25);
+            return;
         }}
+        if (gd.__v50) return;
+        gd.__v50 = true;
 
-        Plotly.newPlot(
-            container,
-            FIG.data,
-            FIG.layout,
-            {{
-                responsive: true,
-                displaylogo: false,
-                scrollZoom: true,
-                displayModeBar: true,
-                modeBarButtonsToAdd: [
-                    "resetCameraDefault",
-                    "resetCameraLastSave"
-                ]
+        try {{
+            const raw = localStorage.getItem(CAMERA_KEY);
+            if (raw) Plotly.relayout(gd, {{"scene.camera": JSON.parse(raw)}});
+        }} catch (e) {{}}
+
+        gd.on("plotly_relayout", function(evt) {{
+            if (!evt) return;
+            const keys = Object.keys(evt);
+            if (keys.some(k => k === "scene.camera" || k.startsWith("scene.camera."))) {{
+                saveCamera(gd);
             }}
-        ).then(function(gd) {{
-            gd.on("plotly_relayout", function(evt) {{
-                if (!evt) return;
-                const keys = Object.keys(evt);
-                if (keys.some(k => k === "scene.camera" || k.startsWith("scene.camera."))) {{
-                    saveCamera(gd);
-                }}
-            }});
-
-            gd.addEventListener("mouseup", function() {{
-                setTimeout(function() {{ saveCamera(gd); }}, 0);
-            }});
-            gd.addEventListener("touchend", function() {{
-                setTimeout(function() {{ saveCamera(gd); }}, 0);
-            }}, {{passive:true}});
-
-            saveCamera(gd);
-
-            // Nudge real da BASE depois que o gráfico já terminou de montar.
-            // Fazemos duas atualizações separadas e um redraw entre elas:
-            // BASE X +1 mm -> redraw -> BASE X original.
-            setTimeout(async function() {{
-                try {{
-                    const baseIndex = 2;
-                    const baseTrace = gd.data[baseIndex];
-                    if (!baseTrace || !baseTrace.x) return;
-
-                    const originalX = JSON.parse(JSON.stringify(baseTrace.x));
-                    const nudgedX = originalX.map(function(row) {{
-                        if (Array.isArray(row)) {{
-                            return row.map(function(v) {{
-                                return typeof v === "number" ? v + 1.0 : v;
-                            }});
-                        }}
-                        return typeof row === "number" ? row + 1.0 : row;
-                    }});
-
-                    await Plotly.restyle(gd, {{x: [nudgedX]}}, [baseIndex]);
-                    await new Promise(function(resolve) {{
-                        requestAnimationFrame(function() {{
-                            requestAnimationFrame(resolve);
-                        }});
-                    }});
-                    await Plotly.redraw(gd);
-                    await new Promise(function(resolve) {{
-                        setTimeout(resolve, 80);
-                    }});
-                    await Plotly.restyle(gd, {{x: [originalX]}}, [baseIndex]);
-                    await Plotly.redraw(gd);
-                }} catch (e) {{
-                    console.warn("Nudge inicial da base não aplicado:", e);
-                }}
-            }}, 500);
         }});
+        gd.addEventListener("mouseup", function() {{
+            setTimeout(function() {{ saveCamera(gd); }}, 0);
+        }});
+        gd.addEventListener("touchend", function() {{
+            setTimeout(function() {{ saveCamera(gd); }}, 0);
+        }}, {{passive:true}});
+        saveCamera(gd);
     }}
 
-    if (window.Plotly) {{
-        render();
-    }} else {{
-        const script = document.createElement("script");
-        script.src = "https://cdn.plot.ly/plotly-latest.min.js";
-        script.onload = render;
-        document.head.appendChild(script);
-    }}
+    attach();
 }})();
 </script>
 """
     return html
 
-# ============================================================
-# GRÁFICO
-# ============================================================
 
 def graph_figure(cfg):
 
@@ -2234,11 +2181,6 @@ initialize_state(robot)
 # (o que prejudica a fluidez), fazemos esse rerun uma única vez no servidor,
 # antes de exibir qualquer gráfico. Assim o usuário nunca vê o primeiro
 # frame defeituoso e, depois disso, o mecanismo normal permanece intacto.
-# ------------------------------------------------------------
-if not st.session_state.get("_initial_render_rerun_done", False):
-    st.session_state._initial_render_rerun_done = True
-    st.rerun()
-
 st.title("Alinhamento automático — Robô 6 DOF + 4 lasers")
 
 # ------------------------------------------------------------
