@@ -2015,6 +2015,7 @@ def make_static_camera_html_v32(fig, height=620):
 
     const CAMERA_KEY = "{camera_key}";
     const FIG = {fig_json};
+    let rendered = false;
 
     function getSavedCamera() {{
         try {{
@@ -2032,71 +2033,139 @@ def make_static_camera_html_v32(fig, height=620):
         }} catch (e) {{}}
     }}
 
-    function render() {{
-        if (!window.Plotly) return;
+    function waitForStableContainer(callback) {{
+        let frames = 0;
+        function check() {{
+            const width = container.clientWidth;
+            const height = container.clientHeight;
 
-        const savedCamera = getSavedCamera();
-        if (savedCamera) {{
-            FIG.layout = FIG.layout || {{}};
-            FIG.layout.scene = FIG.layout.scene || {{}};
-            FIG.layout.scene.camera = savedCamera;
-        }}
-
-        Plotly.newPlot(
-            container,
-            FIG.data,
-            FIG.layout,
-            {{
-                responsive: true,
-                displaylogo: false,
-                scrollZoom: true,
-                displayModeBar: true,
-                modeBarButtonsToAdd: [
-                    "resetCameraDefault",
-                    "resetCameraLastSave"
-                ]
+            if (width > 100 && height > 100) {{
+                frames += 1;
+            }} else {{
+                frames = 0;
             }}
-        ).then(function(gd) {{
-            gd.on("plotly_relayout", function(evt) {{
-                if (!evt) return;
-                const keys = Object.keys(evt);
-                if (keys.some(k => k === "scene.camera" || k.startsWith("scene.camera."))) {{
-                    saveCamera(gd);
+
+            // Espera alguns frames com o tamanho já definido pelo Streamlit.
+            // Isso evita que o Plotly monte a cena antes do container terminar
+            // de receber sua largura/altura.
+            if (frames >= 3) {{
+                callback();
+                return;
+            }}
+
+            requestAnimationFrame(check);
+        }}
+        requestAnimationFrame(check);
+    }}
+
+    function render() {{
+        if (!window.Plotly || rendered) return;
+
+        waitForStableContainer(function() {{
+            if (rendered) return;
+            rendered = true;
+
+            const savedCamera = getSavedCamera();
+            if (savedCamera) {{
+                FIG.layout = FIG.layout || {{}};
+                FIG.layout.scene = FIG.layout.scene || {{}};
+                FIG.layout.scene.camera = savedCamera;
+            }}
+
+            Plotly.newPlot(
+                container,
+                FIG.data,
+                FIG.layout,
+                {{
+                    responsive: true,
+                    displaylogo: false,
+                    scrollZoom: true,
+                    displayModeBar: true,
+                    modeBarButtonsToAdd: [
+                        "resetCameraDefault",
+                        "resetCameraLastSave"
+                    ]
                 }}
-            }});
+            ).then(function(gd) {{
+                gd.on("plotly_relayout", function(evt) {{
+                    if (!evt) return;
+                    const keys = Object.keys(evt);
+                    if (keys.some(k => k === "scene.camera" || k.startsWith("scene.camera."))) {{
+                        saveCamera(gd);
+                    }}
+                }});
 
-            gd.addEventListener("mouseup", function() {{
-                setTimeout(function() {{ saveCamera(gd); }}, 0);
-            }});
-            gd.addEventListener("touchend", function() {{
-                setTimeout(function() {{ saveCamera(gd); }}, 0);
-            }}, {{passive:true}});
+                gd.addEventListener("mouseup", function() {{
+                    setTimeout(function() {{ saveCamera(gd); }}, 0);
+                }});
+                gd.addEventListener("touchend", function() {{
+                    setTimeout(function() {{ saveCamera(gd); }}, 0);
+                }}, {{passive:true}});
 
-            saveCamera(gd);
+                // Primeiro garante que o WebGL foi dimensionado com o tamanho
+                // final do componente.
+                requestAnimationFrame(function() {{
+                    requestAnimationFrame(function() {{
+                        try {{
+                            Plotly.Plots.resize(gd);
+                        }} catch (e) {{}}
 
-            // Pequeno "nudge" inicial para forçar o Plotly/WebGL a
-            // concluir a renderização da cena depois que ela já carregou.
-            // A base anda 1 mm em X e volta para a posição original.
-            setTimeout(function() {{
-                try {{
-                    const baseTrace = FIG.data[2];
-                    if (!baseTrace || !baseTrace.x) return;
+                        // Força uma atualização real do trace da base e volta
+                        // imediatamente. Isso substitui o antigo nudge que
+                        // alterava apenas o objeto FIG, e não o gráfico criado.
+                        setTimeout(function() {{
+                            try {{
+                                const baseTrace = gd.data[2];
+                                if (!baseTrace || !baseTrace.x) return;
 
-                    const originalX = JSON.parse(JSON.stringify(baseTrace.x));
-                    const nudgedX = originalX.map(function(row) {{
-                        if (Array.isArray(row)) {{
-                            return row.map(function(v) {{
-                                return typeof v === "number" ? v + 1.0 : v;
-                            }});
-                        }}
-                        return typeof row === "number" ? row + 1.0 : row;
+                                const originalX = JSON.parse(JSON.stringify(baseTrace.x));
+                                const originalY = JSON.parse(JSON.stringify(baseTrace.y));
+                                const originalZ = JSON.parse(JSON.stringify(baseTrace.z));
+
+                                const nudgedX = originalX.map(function(row) {{
+                                    if (Array.isArray(row)) {{
+                                        return row.map(function(v) {{
+                                            return typeof v === "number" ? v + 1.0 : v;
+                                        }});
+                                    }}
+                                    return typeof row === "number" ? row + 1.0 : row;
+                                }});
+
+                                Plotly.restyle(gd, {{
+                                    x: [nudgedX],
+                                    y: [originalY],
+                                    z: [originalZ]
+                                }}, [2]).then(function() {{
+                                    return new Promise(function(resolve) {{
+                                        requestAnimationFrame(function() {{
+                                            requestAnimationFrame(resolve);
+                                        }});
+                                    }});
+                                }}).then(function() {{
+                                    return Plotly.restyle(gd, {{
+                                        x: [originalX],
+                                        y: [originalY],
+                                        z: [originalZ]
+                                    }}, [2]);
+                                }});
+                            }} catch (e) {{
+                                console.warn("Atualização inicial da cena não aplicada:", e);
+                            }}
+                        }}, 120);
                     }});
+                }});
 
-                    Plotly.restyle(gd, {{x: [nudgedX]}}, [2]).then(function() {{
-                        return Plotly.restyle(gd, {{x: [originalX]}}, [2]);
+                // Se o Streamlit mudar o tamanho do componente depois da
+                // primeira renderização, redimensiona o Plotly sem recriá-lo.
+                if (window.ResizeObserver) {{
+                    const observer = new ResizeObserver(function() {{
+                        try {{ Plotly.Plots.resize(gd); }} catch (e) {{}}
                     }});
-                }} catch (e) {{}}
-            }}, 150);
+                    observer.observe(container);
+                }}
+
+                saveCamera(gd);
+            }});
         }});
     }}
 
@@ -2609,5 +2678,3 @@ else:
                 "displaylogo": False,
             },
         )
-
-
