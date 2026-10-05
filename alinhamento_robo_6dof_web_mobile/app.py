@@ -35,7 +35,6 @@ DEFAULTS = {
     "tube_x": 0.0,
     "tube_y": 0.0,
     "tube_z": -500.0,
-    # Pequeno deslocamento inicial solicitado para forçar a atualização visual.
     "base_x": 0.0,
     "base_y": -500.0,
     "base_z": -2054.0,
@@ -2002,79 +2001,96 @@ Plotly.newPlot(
 
 
 def make_static_camera_html_v32(fig, height=620):
-    """Cena inicial com Plotly embutido, preservando a câmera."""
+    """Cena inicial no DOM principal do Streamlit, preservando a câmera."""
+    fig_json = fig.to_json()
     camera_key = "robot_scene_camera_v32"
 
-    plot_html = fig.to_html(
-        full_html=False,
-        include_plotlyjs=True,
-        config={
-            "responsive": True,
-            "displaylogo": False,
-            "scrollZoom": True,
-            "displayModeBar": True,
-            "modeBarButtonsToAdd": [
-                "resetCameraDefault",
-                "resetCameraLastSave",
-            ],
-        },
-        default_width="100%",
-        default_height=f"{int(height)}px",
-    )
-
     html = f"""
-<div id="robot-scene-v50" style="width:100%;height:{int(height)}px;background:#ffffff;overflow:hidden;">
-{plot_html}
-</div>
+<div id="robot-scene-v32" style="width:100%;height:{int(height)}px;background:#ffffff;overflow:hidden;"></div>
 <script>
 (function() {{
-    const root = document.getElementById("robot-scene-v50");
-    if (!root) return;
+    const container = document.getElementById("robot-scene-v32");
+    if (!container) return;
+
     const CAMERA_KEY = "{camera_key}";
+    const FIG = {fig_json};
+
+    function getSavedCamera() {{
+        try {{
+            const raw = window.localStorage.getItem(CAMERA_KEY);
+            return raw ? JSON.parse(raw) : null;
+        }} catch (e) {{
+            return null;
+        }}
+    }}
 
     function saveCamera(gd) {{
         try {{
-            const c = gd && gd.layout && gd.layout.scene && gd.layout.scene.camera;
-            if (c) localStorage.setItem(CAMERA_KEY, JSON.stringify(c));
+            const camera = gd && gd.layout && gd.layout.scene && gd.layout.scene.camera;
+            if (camera) window.localStorage.setItem(CAMERA_KEY, JSON.stringify(camera));
         }} catch (e) {{}}
     }}
 
-    function attach() {{
-        const gd = root.querySelector('.js-plotly-plot');
-        if (!gd || !window.Plotly) {{
-            setTimeout(attach, 25);
-            return;
+    function render() {{
+        if (!window.Plotly) return;
+
+        const savedCamera = getSavedCamera();
+        if (savedCamera) {{
+            FIG.layout = FIG.layout || {{}};
+            FIG.layout.scene = FIG.layout.scene || {{}};
+            FIG.layout.scene.camera = savedCamera;
         }}
-        if (gd.__v50) return;
-        gd.__v50 = true;
 
-        try {{
-            const raw = localStorage.getItem(CAMERA_KEY);
-            if (raw) Plotly.relayout(gd, {{"scene.camera": JSON.parse(raw)}});
-        }} catch (e) {{}}
-
-        gd.on("plotly_relayout", function(evt) {{
-            if (!evt) return;
-            const keys = Object.keys(evt);
-            if (keys.some(k => k === "scene.camera" || k.startsWith("scene.camera."))) {{
-                saveCamera(gd);
+        Plotly.newPlot(
+            container,
+            FIG.data,
+            FIG.layout,
+            {{
+                responsive: true,
+                displaylogo: false,
+                scrollZoom: true,
+                displayModeBar: true,
+                modeBarButtonsToAdd: [
+                    "resetCameraDefault",
+                    "resetCameraLastSave"
+                ]
             }}
+        ).then(function(gd) {{
+            gd.on("plotly_relayout", function(evt) {{
+                if (!evt) return;
+                const keys = Object.keys(evt);
+                if (keys.some(k => k === "scene.camera" || k.startsWith("scene.camera."))) {{
+                    saveCamera(gd);
+                }}
+            }});
+
+            gd.addEventListener("mouseup", function() {{
+                setTimeout(function() {{ saveCamera(gd); }}, 0);
+            }});
+            gd.addEventListener("touchend", function() {{
+                setTimeout(function() {{ saveCamera(gd); }}, 0);
+            }}, {{passive:true}});
+
+            saveCamera(gd);
         }});
-        gd.addEventListener("mouseup", function() {{
-            setTimeout(function() {{ saveCamera(gd); }}, 0);
-        }});
-        gd.addEventListener("touchend", function() {{
-            setTimeout(function() {{ saveCamera(gd); }}, 0);
-        }}, {{passive:true}});
-        saveCamera(gd);
     }}
 
-    attach();
+    if (window.Plotly) {{
+        render();
+    }} else {{
+        const script = document.createElement("script");
+        script.src = "https://cdn.plot.ly/plotly-latest.min.js";
+        script.onload = render;
+        document.head.appendChild(script);
+    }}
 }})();
 </script>
 """
     return html
 
+# ============================================================
+# GRÁFICO
+# ============================================================
 
 def graph_figure(cfg):
 
@@ -2172,15 +2188,6 @@ robot = load_robot()
 lasers = FourLasers(robot)
 initialize_state(robot)
 
-# ------------------------------------------------------------
-# PRIMEIRO RENDER: força um único rerun antes de mostrar a cena.
-#
-# O problema observado é específico da primeira execução do Streamlit:
-# depois de qualquer alteração na interface, a mesma cena passa a ser
-# renderizada corretamente. Em vez de reconstruir o Plotly no navegador
-# (o que prejudica a fluidez), fazemos esse rerun uma única vez no servidor,
-# antes de exibir qualquer gráfico. Assim o usuário nunca vê o primeiro
-# frame defeituoso e, depois disso, o mecanismo normal permanece intacto.
 st.title("Alinhamento automático — Robô 6 DOF + 4 lasers")
 
 # ------------------------------------------------------------
@@ -2188,39 +2195,6 @@ st.title("Alinhamento automático — Robô 6 DOF + 4 lasers")
 # ------------------------------------------------------------
 
 with st.sidebar:
-
-    # Botão principal no topo da barra lateral.
-    # Mantém o comportamento de botão primário, mas com aparência verde.
-    st.markdown(
-        """
-        <style>
-        div.stButton > button[kind="primary"] {
-            background-color: #2E7D32 !important;
-            border-color: #2E7D32 !important;
-            color: white !important;
-        }
-        div.stButton > button[kind="primary"]:hover {
-            background-color: #1B5E20 !important;
-            border-color: #1B5E20 !important;
-            color: white !important;
-        }
-        div.stButton > button[kind="primary"]:focus:not(:active) {
-            color: white !important;
-            border-color: #2E7D32 !important;
-            box-shadow: 0 0 0 0.1rem rgba(46,125,50,0.25) !important;
-        }
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    align_clicked = st.button(
-        "▶ ALINHAR AUTOMATICAMENTE",
-        use_container_width=True,
-        type="primary",
-    )
-
-    st.divider()
 
     st.header("Configuração")
 
@@ -2354,39 +2328,22 @@ with st.sidebar:
         np.asarray(q_deg, dtype=float)
     )
 
-    # Atualiza a pose somente quando os valores dos widgets realmente mudam.
-    # Não usamos callback: alterar um number_input já faz o Streamlit executar
-    # novamente o script, e a pose é então atualizada aqui antes da cena 3D.
-    previous_manual_q = st.session_state.get("manual_q_snapshot")
-    joints_changed = (
-        previous_manual_q is not None
-        and not np.allclose(
-            manual_q,
-            np.asarray(previous_manual_q, dtype=float),
-            rtol=0.0,
-            atol=1e-12,
-        )
-    )
-
-    if joints_changed:
-        st.session_state.q = manual_q.copy()
+    if st.button(
+        "Aplicar juntas",
+        use_container_width=True,
+    ):
+        st.session_state.q = manual_q
         st.session_state.trajectory = None
         st.session_state.trajectory_cfg = None
         st.session_state.last_result = None
-        st.session_state.status = "Pose manual atualizada"
-
-    st.session_state.manual_q_snapshot = manual_q.copy()
+        st.session_state.status = "Pose manual aplicada"
+        st.rerun()
 
     if st.button(
         "↺ Resetar pose",
         use_container_width=True,
     ):
         st.session_state.q = np.radians(
-            INITIAL_Q_DEG.copy()
-        )
-        for i in range(6):
-            st.session_state[f"q_deg_{i}"] = float(INITIAL_Q_DEG[i])
-        st.session_state.manual_q_snapshot = np.radians(
             INITIAL_Q_DEG.copy()
         )
         reset_history()
@@ -2397,6 +2354,12 @@ with st.sidebar:
         st.rerun()
 
     st.divider()
+
+    align_clicked = st.button(
+        "▶ ALINHAR AUTOMATICAMENTE",
+        use_container_width=True,
+        type="primary",
+    )
 
     stop_clicked = st.button(
         "■ PARAR",
@@ -2430,7 +2393,7 @@ if align_clicked:
     if can_replay:
         q0 = np.asarray(previous_states[0], dtype=float).copy()
     else:
-        q0 = manual_q.copy()
+        q0 = st.session_state.q.copy()
 
     with st.spinner("Calculando trajetória de alinhamento..."):
         states, result = solve_trajectory(
@@ -2521,8 +2484,7 @@ else:
 
 
 
-        # A cena normal usa diretamente os valores atuais dos campos q1...q6.
-        q = manual_q
+        q = st.session_state.q
 
         d, angle, max_dist_error = current_metrics(
             robot,
@@ -2538,10 +2500,10 @@ else:
             lasers,
         )
 
-        st.html(
+        components.html(
             make_static_camera_html_v32(scene_fig, height=620),
-            width="stretch",
-            unsafe_allow_javascript=True,
+            height=620,
+            scrolling=False,
         )
 
         col1, col2, col3, col4 = st.columns(4)
