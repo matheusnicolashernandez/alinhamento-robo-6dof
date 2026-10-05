@@ -2002,15 +2002,7 @@ Plotly.newPlot(
 
 
 def make_static_camera_html_v32(fig, height=620):
-    """Cena inicial: inicializa o Plotly sem reconstruções posteriores.
-
-    Estratégia V48:
-    - a cena é criada uma única vez;
-    - os dois traces 3D mais pesados (tubo e base) são inseridos depois
-      que o WebGL já criou o contexto;
-    - depois disso, nenhuma correção/React extra é executada.
-    Isso mantém a fluidez das atualizações das juntas.
-    """
+    """Cena inicial no DOM principal do Streamlit, preservando a câmera."""
     fig_json = fig.to_json()
     camera_key = "robot_scene_camera_v32"
 
@@ -2028,7 +2020,9 @@ def make_static_camera_html_v32(fig, height=620):
         try {{
             const raw = window.localStorage.getItem(CAMERA_KEY);
             return raw ? JSON.parse(raw) : null;
-        }} catch (e) {{ return null; }}
+        }} catch (e) {{
+            return null;
+        }}
     }}
 
     function saveCamera(gd) {{
@@ -2048,15 +2042,9 @@ def make_static_camera_html_v32(fig, height=620):
             FIG.layout.scene.camera = savedCamera;
         }}
 
-        // O problema da primeira pintura ocorre nos traces de malha 3D.
-        // Inicializamos primeiro os traces leves e, somente depois que o
-        // contexto WebGL existe, adicionamos as duas malhas estáticas.
-        const meshTraces = [FIG.data[0], FIG.data[2]];
-        const lightData = FIG.data.filter(function(_, i) {{ return i !== 0 && i !== 2; }});
-
         Plotly.newPlot(
             container,
-            lightData,
+            FIG.data,
             FIG.layout,
             {{
                 responsive: true,
@@ -2084,11 +2072,43 @@ def make_static_camera_html_v32(fig, height=620):
                 setTimeout(function() {{ saveCamera(gd); }}, 0);
             }}, {{passive:true}});
 
-            // Insere tubo e base no contexto WebGL já inicializado.
-            Plotly.addTraces(gd, meshTraces).then(function() {{
-                saveCamera(gd);
-                try {{ Plotly.Plots.resize(gd); }} catch (e) {{}}
-            }});
+            saveCamera(gd);
+
+            // Nudge real da BASE depois que o gráfico já terminou de montar.
+            // Fazemos duas atualizações separadas e um redraw entre elas:
+            // BASE X +1 mm -> redraw -> BASE X original.
+            setTimeout(async function() {{
+                try {{
+                    const baseIndex = 2;
+                    const baseTrace = gd.data[baseIndex];
+                    if (!baseTrace || !baseTrace.x) return;
+
+                    const originalX = JSON.parse(JSON.stringify(baseTrace.x));
+                    const nudgedX = originalX.map(function(row) {{
+                        if (Array.isArray(row)) {{
+                            return row.map(function(v) {{
+                                return typeof v === "number" ? v + 1.0 : v;
+                            }});
+                        }}
+                        return typeof row === "number" ? row + 1.0 : row;
+                    }});
+
+                    await Plotly.restyle(gd, {{x: [nudgedX]}}, [baseIndex]);
+                    await new Promise(function(resolve) {{
+                        requestAnimationFrame(function() {{
+                            requestAnimationFrame(resolve);
+                        }});
+                    }});
+                    await Plotly.redraw(gd);
+                    await new Promise(function(resolve) {{
+                        setTimeout(resolve, 80);
+                    }});
+                    await Plotly.restyle(gd, {{x: [originalX]}}, [baseIndex]);
+                    await Plotly.redraw(gd);
+                }} catch (e) {{
+                    console.warn("Nudge inicial da base não aplicado:", e);
+                }}
+            }}, 500);
         }});
     }}
 
@@ -2104,7 +2124,6 @@ def make_static_camera_html_v32(fig, height=620):
 </script>
 """
     return html
-
 
 # ============================================================
 # GRÁFICO
@@ -2206,11 +2225,21 @@ robot = load_robot()
 lasers = FourLasers(robot)
 initialize_state(robot)
 
+# ------------------------------------------------------------
+# PRIMEIRO RENDER: força um único rerun antes de mostrar a cena.
+#
+# O problema observado é específico da primeira execução do Streamlit:
+# depois de qualquer alteração na interface, a mesma cena passa a ser
+# renderizada corretamente. Em vez de reconstruir o Plotly no navegador
+# (o que prejudica a fluidez), fazemos esse rerun uma única vez no servidor,
+# antes de exibir qualquer gráfico. Assim o usuário nunca vê o primeiro
+# frame defeituoso e, depois disso, o mecanismo normal permanece intacto.
+# ------------------------------------------------------------
+if not st.session_state.get("_initial_render_rerun_done", False):
+    st.session_state._initial_render_rerun_done = True
+    st.rerun()
+
 st.title("Alinhamento automático — Robô 6 DOF + 4 lasers")
-st.caption(
-    "Versão web para celular/tablet. "
-    "O cálculo continua baseado no normal.urdf."
-)
 
 # ------------------------------------------------------------
 # SIDEBAR
@@ -2606,7 +2635,3 @@ else:
             },
         )
 
-        st.caption(
-            "O retângulo está acoplado diretamente à J6; "
-            "o Z do end-effector é a normal/perpendicular dos lasers."
-        )
