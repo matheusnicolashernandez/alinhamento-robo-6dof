@@ -2002,7 +2002,15 @@ Plotly.newPlot(
 
 
 def make_static_camera_html_v32(fig, height=620):
-    """Cena inicial no DOM principal do Streamlit, preservando a câmera."""
+    """Cena inicial: inicializa o Plotly sem reconstruções posteriores.
+
+    Estratégia V48:
+    - a cena é criada uma única vez;
+    - os dois traces 3D mais pesados (tubo e base) são inseridos depois
+      que o WebGL já criou o contexto;
+    - depois disso, nenhuma correção/React extra é executada.
+    Isso mantém a fluidez das atualizações das juntas.
+    """
     fig_json = fig.to_json()
     camera_key = "robot_scene_camera_v32"
 
@@ -2020,9 +2028,7 @@ def make_static_camera_html_v32(fig, height=620):
         try {{
             const raw = window.localStorage.getItem(CAMERA_KEY);
             return raw ? JSON.parse(raw) : null;
-        }} catch (e) {{
-            return null;
-        }}
+        }} catch (e) {{ return null; }}
     }}
 
     function saveCamera(gd) {{
@@ -2042,9 +2048,15 @@ def make_static_camera_html_v32(fig, height=620):
             FIG.layout.scene.camera = savedCamera;
         }}
 
+        // O problema da primeira pintura ocorre nos traces de malha 3D.
+        // Inicializamos primeiro os traces leves e, somente depois que o
+        // contexto WebGL existe, adicionamos as duas malhas estáticas.
+        const meshTraces = [FIG.data[0], FIG.data[2]];
+        const lightData = FIG.data.filter(function(_, i) {{ return i !== 0 && i !== 2; }});
+
         Plotly.newPlot(
             container,
-            FIG.data,
+            lightData,
             FIG.layout,
             {{
                 responsive: true,
@@ -2072,50 +2084,11 @@ def make_static_camera_html_v32(fig, height=620):
                 setTimeout(function() {{ saveCamera(gd); }}, 0);
             }}, {{passive:true}});
 
-            saveCamera(gd);
-
-            // CORREÇÃO SOMENTE NA PRIMEIRA ABERTURA.
-            // Depois disso, nenhuma reconstrução extra é feita quando o
-            // usuário altera as juntas. Assim preservamos a fluidez.
-            setTimeout(function() {{
-                try {{
-                    const FLAG = "robot_scene_initial_render_v47";
-                    if (window.localStorage.getItem(FLAG) === "1") return;
-
-                    const cameraBefore = gd.layout && gd.layout.scene
-                        ? gd.layout.scene.camera
-                        : null;
-
-                    if (cameraBefore) {{
-                        FIG.layout.scene.camera = JSON.parse(
-                            JSON.stringify(cameraBefore)
-                        );
-                    }}
-
-                    Plotly.react(
-                        gd,
-                        FIG.data,
-                        FIG.layout,
-                        {{
-                            responsive: true,
-                            displaylogo: false,
-                            scrollZoom: true,
-                            displayModeBar: true,
-                            modeBarButtonsToAdd: [
-                                "resetCameraDefault",
-                                "resetCameraLastSave"
-                            ]
-                        }}
-                    ).then(function() {{
-                        try {{
-                            Plotly.Plots.resize(gd);
-                            window.localStorage.setItem(FLAG, "1");
-                        }} catch (e) {{}}
-                    }});
-                }} catch (e) {{
-                    console.warn("Correção inicial da cena não aplicada:", e);
-                }}
-            }}, 350);
+            // Insere tubo e base no contexto WebGL já inicializado.
+            Plotly.addTraces(gd, meshTraces).then(function() {{
+                saveCamera(gd);
+                try {{ Plotly.Plots.resize(gd); }} catch (e) {{}}
+            }});
         }});
     }}
 
@@ -2131,6 +2104,7 @@ def make_static_camera_html_v32(fig, height=620):
 </script>
 """
     return html
+
 
 # ============================================================
 # GRÁFICO
