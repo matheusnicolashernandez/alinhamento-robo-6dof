@@ -2226,10 +2226,7 @@ lasers = FourLasers(robot)
 initialize_state(robot)
 
 st.title("Alinhamento automático — Robô 6 DOF + 4 lasers")
-st.caption(
-    "Versão web para celular/tablet. "
-    "O cálculo continua baseado no normal.urdf."
-)
+
 
 # ------------------------------------------------------------
 # SIDEBAR
